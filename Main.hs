@@ -269,18 +269,19 @@ evalLine mode line = launchProcess line
 evalBlock :: Text -> Text -> EvalM Text
 evalBlock mode block = fmap (T.take max_output . T.concat) $ mapM launchProcess $ [":{"] ++ T.lines block ++ [":}"]
 
-launchProcess :: Text -> EvalM Text
+launchProcess :: HasCallStack => Text -> EvalM Text
 launchProcess s = liftIO $ do
-  T.writeFile "input" s
+  T.writeFile "input" (T.filter (/= '\n') s `T.snoc` '\n')
   input <- openBinaryFile "input" ReadMode
   (outr, outw) <- createPipe
-  p <- createProcess (shell sandbox_cmd) { std_in = UseHandle input
-                                         , std_out = UseHandle outw
-                                         , std_err = UseHandle outw
-                                         }
+  (_, _, _, p) <- createProcess (shell sandbox_cmd) { std_in = UseHandle input
+                                                    , std_out = UseHandle outw
+                                                    , std_err = UseHandle outw
+                                                    , close_fds = True
+                                                    }
   finally (go "" outr)
-          (do cleanupProcess p
-              hClose outr)
+          (do hClose outr
+              waitForProcess p)
   where go rd hdl | T.length rd >= max_output = pure $ T.take max_output rd
                   | otherwise = do ch <- T.hGetChunk hdl
                                    if T.null ch
