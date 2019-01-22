@@ -156,7 +156,8 @@ parseMessage t | Just ('>', cmd) <- T.uncons t
              | T.null t = []
              | otherwise = go (T.tail t)
         dropLanguageTag t | (first, rest) <- T.break (== '\n') t
-                          , not (T.any isSpace first) = rest
+                          , not (T.any isSpace first)
+                          , not (T.null rest) = rest
                           | otherwise = t
         stripControl c | isControl c = ' '
                        | otherwise = c
