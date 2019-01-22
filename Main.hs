@@ -201,7 +201,8 @@ handleEvent (MessageUpdate Message{..}) = do
                              , oldreq /= req
                              -> if null $ view reqCommands req
                                 then case reply of
-                                  Just id -> sendTrace $ DeleteMessage (messageChannel, id)
+                                  Just id -> do sendTrace $ DeleteMessage (messageChannel, id)
+                                                assign (recentMsgs . at (messageChannel, messageId) . _Just . _3) Nothing
                                   _ -> pure ()
                                 else do assign (recentMsgs . at (messageChannel, messageId)) $ Just (ts, req, reply)
                                         empty <- enqueue (messageChannel, messageId)
