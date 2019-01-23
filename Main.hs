@@ -35,6 +35,8 @@ import System.Process
 
 import Discord
 
+import DupQueue
+
 getAuth :: IO Auth
 getAuth = Auth <$> read <$> readFile "auth.conf"
 login = loginRest =<< getAuth
@@ -58,8 +60,7 @@ makeLenses ''ParsedReq
 data EvalState = EvalState
   { _botHandle :: MVar BotHandle
   , _recentMsgs :: Map (Snowflake, Snowflake) (UTCTime, ParsedReq, Maybe Snowflake)
-  , _channel :: TChan (Snowflake, Snowflake)
-  , _processing :: TVar (S.Set (Snowflake, Snowflake))
+  , _channel :: UChan (Snowflake, Snowflake)
   }
 makeLenses ''EvalState
 
@@ -106,12 +107,10 @@ send req = do resp <- sendEither req
                 Right x -> pure x
 
 main = do h <- newEmptyMVar
-          c <- newTChanIO
-          p <- newTVarIO S.empty
+          c <- newUChan
           env <- newMVar $ EvalState { _botHandle = h
                                      , _recentMsgs = M.empty
                                      , _channel = c
-                                     , _processing = p
                                      }
           forkIO $ runReaderT (runEvalM backendLoop) env
           runReaderT (runEvalM mainLoop) env
@@ -153,6 +152,8 @@ parseMessage t | Just ('>', cmd) <- T.uncons t
              , "`" `T.isInfixOf` rest
              , (inside, next) <- T.breakOn "`" rest
              = EvalLine (T.map stripControl inside) : go (T.drop 1 next)
+             | Just next <- T.stripPrefix "\\" t
+             = go (T.tail next)
              | T.null t = []
              | otherwise = go (T.tail t)
         dropLanguageTag t | (first, rest) <- T.break (== '\n') t
@@ -167,23 +168,6 @@ pruneMessages :: EvalM ()
 pruneMessages = do time <- liftIO getCurrentTime
                    modifying recentMsgs (M.filter (\(ts, _, _) -> diffUTCTime time ts < fromInteger prune_messages_after_seconds))
 
-enqueue :: (Snowflake, Snowflake) -> EvalM Bool
-enqueue s = do q <- use channel
-               p <- use processing
-               liftIO $ atomically $ do
-                 set <- readTVar p
-                 unless (S.member s set) $ do writeTVar p (S.insert s set)
-                                              writeTChan q s
-                 pure (S.null set)
-
-dequeue :: EvalM (Snowflake, Snowflake)
-dequeue = do q <- use channel
-             p <- use processing
-             liftIO $ atomically $ do
-               s <- readTChan q
-               modifyTVar' p (S.delete s)
-               pure s
-
 handleEvent :: HasCallStack => Event -> EvalM ()
 handleEvent (MessageCreate Message{..}) = do
   pruneMessages
@@ -191,8 +175,9 @@ handleEvent (MessageCreate Message{..}) = do
   let req = parseMessage messageText
   assign (recentMsgs . at (messageChannel, messageId)) $ Just (time, req, Nothing)
   unless (null $ view reqCommands req) $ do
-    empty <- enqueue (messageChannel, messageId)
-    unless empty $ do
+    queue <- use channel
+    status <- liftIO $ writeUChan queue (messageChannel, messageId)
+    when (status == Just False) $ do
       sendTrace $ CreateReaction (messageChannel, messageId) react_wait
 handleEvent (MessageUpdate Message{..}) = do
   pruneMessages
@@ -206,8 +191,9 @@ handleEvent (MessageUpdate Message{..}) = do
                                                 assign (recentMsgs . at (messageChannel, messageId) . _Just . _3) Nothing
                                   _ -> pure ()
                                 else do assign (recentMsgs . at (messageChannel, messageId)) $ Just (ts, req, reply)
-                                        empty <- enqueue (messageChannel, messageId)
-                                        unless empty $ do
+                                        queue <- use channel
+                                        status <- liftIO $ writeUChan queue (messageChannel, messageId)
+                                        when (status == Just False) $ do
                                           sendTrace $ CreateReaction (messageChannel, messageId) react_wait
     _ -> pure ()
 handleEvent (MessageDelete messageChannel messageId) = do
@@ -219,7 +205,8 @@ handleEvent (MessageDelete messageChannel messageId) = do
 handleEvent _ = pure ()
 
 backendLoop :: EvalM ()
-backendLoop = forever $ catch (do (chan, msg) <- dequeue
+backendLoop = forever $ catch (do queue <- use channel
+                                  (chan, msg) <- liftIO $ readUChan queue
                                   sendTrace $ DeleteOwnReaction (chan, msg) react_wait
                                   x <- use (recentMsgs . at (chan, msg))
                                   case x of
