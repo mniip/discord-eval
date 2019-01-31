@@ -46,16 +46,14 @@ max_blocks_per_msg = 10
 max_chars_per_msg = 2000
 react_wait = "\x231B"
 react_check = "\x2705"
-sandbox_cmd = "cat"
 max_output = 1000
+sandbox_cmd = "cat"
+sandbox_conf = "--"
 
 type BotHandle = (RestChan, Gateway, [ThreadIdType])
-data Command = Reset | EvalLine Text | EvalBlock Text deriving (Eq, Show)
-data ParsedReq = ParsedReq
-  { _reqCommands :: [Command]
-  , _reqMode :: Text
-  } deriving (Eq, Show)
-makeLenses ''ParsedReq
+data Mode = HaskellEval | Haskell | C | Shell deriving (Eq, Show)
+data Command = Reset Mode | EvalLine Mode Text | EvalBlock Mode Text deriving (Eq, Show)
+type ParsedReq = [Command]
 
 data EvalState = EvalState
   { _botHandle :: MVar BotHandle
@@ -135,34 +133,49 @@ main = do h <- newEmptyMVar
                          Left err -> do logM "Exception in nextEvent:"
                                         logShowM err
 
+parseMode :: Text -> Mode
+parseMode t = case T.toLower t of
+  "" -> HaskellEval
+  "hs" -> HaskellEval
+  "haskell" -> HaskellEval
+  "ghc" -> Haskell
+  "c" -> C
+  "gcc" -> C
+  "!" -> Shell
+  "sh" -> Shell
+  "bash" -> Shell
+  "shell" -> Shell
+  _ -> HaskellEval
+
 parseMessage :: Text -> ParsedReq
 parseMessage t | Just ('>', cmd) <- T.uncons t
-               , (mode, rest) <- T.span isLetter cmd = ParsedReq { _reqMode = mode, _reqCommands = take max_blocks_per_msg $ go rest }
-  where go t | Just next <- T.stripPrefix "!reset" t
-             = Reset : go next
-             | Just rest <- T.stripPrefix "```" t
-             , "```" `T.isInfixOf` rest
-             , (inside, next) <- T.breakOn "```" rest
-             = EvalBlock (T.copy $ dropLanguageTag inside) : go (T.drop 3 next)
-             | Just rest <- T.stripPrefix "``" t
-             , "``" `T.isInfixOf` rest
-             , (inside, next) <- T.breakOn "``" rest
-             = EvalLine (T.map stripControl inside) : go (T.drop 2 next)
-             | Just rest <- T.stripPrefix "`" t
-             , "`" `T.isInfixOf` rest
-             , (inside, next) <- T.breakOn "`" rest
-             = EvalLine (T.map stripControl inside) : go (T.drop 1 next)
-             | Just next <- T.stripPrefix "\\" t
-             = go (T.tail next)
-             | T.null t = []
-             | otherwise = go (T.tail t)
+               , (m, rest) <- T.break (\x -> x == '`' || isSpace x) cmd = take max_blocks_per_msg $ go (parseMode m) rest
+  where go mode t | Just next <- T.stripPrefix "!reset" t
+                  = Reset mode : go mode next
+                  | Just rest <- T.stripPrefix "```" t
+                  , "```" `T.isInfixOf` rest
+                  , (inside, next) <- T.breakOn "```" rest
+                  , (tag, code) <- dropLanguageTag inside
+                  = EvalBlock (maybe mode parseMode tag) (T.copy code) : go mode (T.drop 3 next)
+                  | Just rest <- T.stripPrefix "``" t
+                  , "``" `T.isInfixOf` rest
+                  , (inside, next) <- T.breakOn "``" rest
+                  = EvalLine mode (T.map stripControl inside) : go mode (T.drop 2 next)
+                  | Just rest <- T.stripPrefix "`" t
+                  , "`" `T.isInfixOf` rest
+                  , (inside, next) <- T.breakOn "`" rest
+                  = EvalLine mode (T.map stripControl inside) : go mode (T.drop 1 next)
+                  | Just next <- T.stripPrefix "\\" t
+                  = go mode (T.tail next)
+                  | T.null t = []
+                  | otherwise = go mode (T.tail t)
         dropLanguageTag t | (first, rest) <- T.break (== '\n') t
                           , not (T.any isSpace first)
-                          , not (T.null rest) = rest
-                          | otherwise = t
+                          , not (T.null rest) = (mfilter (not . T.null) $ Just first, rest)
+                          | otherwise = (Nothing, t)
         stripControl c | isControl c = ' '
                        | otherwise = c
-parseMessage _ = ParsedReq { _reqCommands = [], _reqMode = "" }
+parseMessage _ = []
 
 pruneMessages :: EvalM ()
 pruneMessages = do time <- liftIO getCurrentTime
@@ -174,7 +187,7 @@ handleEvent (MessageCreate Message{..}) = do
   time <- liftIO getCurrentTime
   let req = parseMessage messageText
   assign (recentMsgs . at (messageChannel, messageId)) $ Just (time, req, Nothing)
-  unless (null $ view reqCommands req) $ do
+  unless (null req) $ do
     queue <- use channel
     status <- liftIO $ writeUChan queue (messageChannel, messageId)
     when (status == Just False) $ do
@@ -185,7 +198,7 @@ handleEvent (MessageUpdate Message{..}) = do
   case x of
     Just (ts, oldreq, reply) | req <- parseMessage messageText
                              , oldreq /= req
-                             -> if null $ view reqCommands req
+                             -> if null req
                                 then case reply of
                                   Just id -> do sendTrace $ DeleteMessage (messageChannel, id)
                                                 assign (recentMsgs . at (messageChannel, messageId) . _Just . _3) Nothing
@@ -210,14 +223,14 @@ backendLoop = forever $ catch (do queue <- use channel
                                   sendTrace $ DeleteOwnReaction (chan, msg) react_wait
                                   x <- use (recentMsgs . at (chan, msg))
                                   case x of
-                                    Just (_, ParsedReq{..}, reply) -> do
-                                      outs <- forM _reqCommands $ \cmd -> do
+                                    Just (_, req, reply) -> do
+                                      outs <- forM req $ \cmd -> do
                                         sendTrace $ TriggerTypingIndicator chan
                                         case cmd of
-                                          Reset -> do resetMode _reqMode
-                                                      pure ""
-                                          EvalLine ln -> evalLine _reqMode ln
-                                          EvalBlock blk -> evalBlock _reqMode blk
+                                          Reset mode -> do resetMode mode
+                                                           pure ""
+                                          EvalLine mode ln -> evalLine mode ln
+                                          EvalBlock mode blk -> evalBlock mode blk
                                       let res = formatResults outs
                                       case reply of
                                         Just id -> sendTrace $ EditMessage (chan, id) res Nothing
@@ -230,7 +243,7 @@ backendLoop = forever $ catch (do queue <- use channel
 formatResults :: [Text] -> Text
 formatResults res = if T.null msg then react_check else msg
   where
-    nonempty = zip [0..] $ filter (not . T.null) $ map (T.replace "``" "``\x200D") res
+    nonempty = zip [0..] $ filter (not . T.null) $ map (T.replace "``" "``\x200D" . T.filter (\x -> x == '\n' || not (isControl x))) res
     
     sorted = sortBy (comparing $ T.length . snd) nonempty
     
@@ -249,21 +262,29 @@ formatResults res = if T.null msg then react_check else msg
 
     msg = T.concat $ map format nonempty
 
-resetMode :: Text -> EvalM ()
+resetMode :: Mode -> EvalM ()
+resetMode HaskellEval = launchWithData (proc sandbox_cmd [sandbox_conf, "kill", "Dghci"]) "" >> pure ()
 resetMode _ = pure ()
 
-evalLine :: Text -> Text -> EvalM Text
-evalLine mode line = launchProcess line
+evalLine :: Mode -> Text -> EvalM Text
+evalLine HaskellEval line = launchWithLine (proc sandbox_cmd [sandbox_conf, "Dghci"]) line
+evalLine mode line = evalBlock mode line
 
-evalBlock :: Text -> Text -> EvalM Text
-evalBlock mode block = fmap (T.take max_output . T.concat) $ mapM launchProcess $ [":{"] ++ T.lines block ++ [":}"]
+evalBlock :: Mode -> Text -> EvalM Text
+evalBlock HaskellEval block = fmap (T.take max_output . T.concat) $ mapM (evalLine HaskellEval) $ [":{"] ++ T.lines block ++ [":}"]
+evalBlock C block = launchWithData (proc sandbox_cmd [sandbox_conf, "rungcc"]) block
+evalBlock Shell block = launchWithData (proc sandbox_cmd [sandbox_conf, "bash"]) block
+evalBlock Haskell block = launchWithData (proc sandbox_cmd [sandbox_conf, "runghc"]) block
 
-launchProcess :: HasCallStack => Text -> EvalM Text
-launchProcess s = liftIO $ do
-  T.writeFile "input" (T.filter (/= '\n') s `T.snoc` '\n')
+launchWithLine :: HasCallStack => CreateProcess -> Text -> EvalM Text
+launchWithLine cp s = launchWithData cp (T.filter (/= '\n') s `T.snoc` '\n')
+
+launchWithData :: HasCallStack => CreateProcess -> Text -> EvalM Text
+launchWithData cp s = liftIO $ do
+  T.writeFile "input" s
   input <- openBinaryFile "input" ReadMode
   (outr, outw) <- createPipe
-  (_, _, _, p) <- createProcess (shell sandbox_cmd) { std_in = UseHandle input
+  (_, _, _, p) <- createProcess cp { std_in = UseHandle input
                                                     , std_out = UseHandle outw
                                                     , std_err = UseHandle outw
                                                     , close_fds = True
