@@ -39,7 +39,6 @@ import DupQueue
 
 getAuth :: IO Auth
 getAuth = Auth <$> read <$> readFile "auth.conf"
-login = loginRest =<< getAuth
 
 prune_messages_after_seconds = 10 * 60
 max_blocks_per_msg = 10
@@ -71,67 +70,51 @@ instance MonadState EvalState EvalM where
     where forcing (b, a) = do a' <- evaluate a
                               pure (a', b)
 
-withBot :: (BotHandle -> EvalM a) -> EvalM a
-withBot = bracket (use botHandle >>= \h -> liftIO $ takeMVar h)
-                  (\bot -> use botHandle >>= \h -> liftIO $ putMVar h bot)
-
 logM :: String -> EvalM ()
 logM s = liftIO $ do time <- getCurrentTime
                      putStrLn $ show time ++ ": " ++ s
 
-logShowM :: Show a => a -> EvalM ()
-logShowM = logM . show
+restCallTrace :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallException a)
+restCallTrace req = do bot <- use botHandle >>= liftIO . readMVar
+                       resp <- liftIO $ restCall bot req
+                       case resp of
+                         Left err -> do logM "Error while calling REST:"
+                                        logM (show err)
+                                        pure (Left err)
+                         Right r -> pure (Right r)
 
-traceM :: HasCallStack => EvalM ()
-traceM = logShowM callStack
-
-instance Exception RestCallException
-
-sendEither :: (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallException a)
-sendEither req = withBot (\bot -> liftIO $ restCall bot req)
-
-sendTrace :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM ()
-sendTrace req = do resp <- sendEither req
-                   case resp of
-                     Left err -> do logM "Error while calling REST:"
-                                    logShowM err
-                                    traceM
-                     Right _ -> pure ()
-
-send :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM a
-send req = do resp <- sendEither req
-              case resp of
-                Left err -> throwM err
-                Right x -> pure x
-
-main = do h <- newEmptyMVar
+main :: IO ()
+main = do bh <- newEmptyMVar
           c <- newUChan
-          env <- newMVar $ EvalState { _botHandle = h
-                                     , _recentMsgs = M.empty
-                                     , _channel = c
-                                     }
-          forkIO $ runReaderT (runEvalM backendLoop) env
-          runReaderT (runEvalM mainLoop) env
-  where mainLoop = forever $ catch (do bot <- liftIO $ loginRestGateway =<< getAuth
-                                       finally (do use botHandle >>= \h -> liftIO $ putMVar h bot
+          env <- newMVar $ EvalState { _botHandle = bh
+                         , _recentMsgs = M.empty
+                         , _channel = c
+                         }
+          tid <- forkIO $ runReaderT (runEvalM backendLoop) env
+          finally (runReaderT (runEvalM frontLoop) env)
+                  (killThread tid)
+
+frontLoop :: EvalM ()
+frontLoop = forever $ catch (do bot <- liftIO $ loginRestGateway =<< getAuth
+                                void $ finally (do use botHandle >>= \h -> liftIO $ putMVar h bot
                                                    logM "Connected"
                                                    eventLoop
                                                    use botHandle >>= \h -> liftIO $ takeMVar h)
                                                (do logM "Disconnected"
-                                                   liftIO $ stopDiscord bot)
-                                       pure ())
-                                   (\e -> do logM "Exception in mainLoop:"
-                                             logShowM (e :: SomeException)
-                                             liftIO $ threadDelay $ 10 * 1000000)
-        eventLoop = do bot <- use botHandle >>= liftIO . readMVar
-                       everr <- liftIO $ nextEvent bot
-                       case everr of
-                         Right event -> do catch (handleEvent event)
-                                                 (\e -> do logM "Exception in eventLoop:"
-                                                           logShowM (e :: SomeException))
-                                           eventLoop
-                         Left err -> do logM "Exception in nextEvent:"
-                                        logShowM err
+                                                   liftIO $ stopDiscord bot))
+                            (\e -> do logM "Exception in mainLoop:"
+                                      logM (show (e :: SomeException))
+                                      liftIO $ threadDelay $ 10 * 10^6)
+
+eventLoop :: EvalM ()
+eventLoop = do bot <- use botHandle >>= liftIO . readMVar
+               everr <- liftIO $ nextEvent bot
+               case everr of
+                 Right event -> do handleEvent event
+                                   eventLoop
+                 Left err -> do logM "Exception in nextEvent:"
+                                logM (show err)
+                                liftIO $ threadDelay $ 10 * 10^6
 
 parseMode :: Text -> Mode
 parseMode t = case T.toLower t of
@@ -191,7 +174,7 @@ handleEvent (MessageCreate Message{..}) = do
     queue <- use channel
     status <- liftIO $ writeUChan queue (messageChannel, messageId)
     when (status == Just False) $ do
-      sendTrace $ CreateReaction (messageChannel, messageId) react_wait
+      void $ restCallTrace $ CreateReaction (messageChannel, messageId) react_wait
 handleEvent (MessageUpdate Message{..}) = do
   pruneMessages
   x <- use (recentMsgs . at (messageChannel, messageId))
@@ -200,32 +183,32 @@ handleEvent (MessageUpdate Message{..}) = do
                              , oldreq /= req
                              -> if null req
                                 then case reply of
-                                  Just id -> do sendTrace $ DeleteMessage (messageChannel, id)
+                                  Just id -> do void $ restCallTrace $ DeleteMessage (messageChannel, id)
                                                 assign (recentMsgs . at (messageChannel, messageId) . _Just . _3) Nothing
                                   _ -> pure ()
                                 else do assign (recentMsgs . at (messageChannel, messageId)) $ Just (ts, req, reply)
                                         queue <- use channel
                                         status <- liftIO $ writeUChan queue (messageChannel, messageId)
                                         when (status == Just False) $ do
-                                          sendTrace $ CreateReaction (messageChannel, messageId) react_wait
+                                          void $ restCallTrace $ CreateReaction (messageChannel, messageId) react_wait
     _ -> pure ()
 handleEvent (MessageDelete messageChannel messageId) = do
   pruneMessages
   x <- use (recentMsgs . at (messageChannel, messageId))
   case x of
-    Just (ts, oldreq, Just id) -> sendTrace $ DeleteMessage (messageChannel, id)
+    Just (ts, oldreq, Just id) -> void $ restCallTrace $ DeleteMessage (messageChannel, id)
     _ -> pure ()
 handleEvent _ = pure ()
 
 backendLoop :: EvalM ()
 backendLoop = forever $ catch (do queue <- use channel
                                   (chan, msg) <- liftIO $ readUChan queue
-                                  sendTrace $ DeleteOwnReaction (chan, msg) react_wait
+                                  void $ restCallTrace $ DeleteOwnReaction (chan, msg) react_wait
                                   x <- use (recentMsgs . at (chan, msg))
                                   case x of
                                     Just (_, req, reply) -> do
                                       outs <- forM req $ \cmd -> do
-                                        sendTrace $ TriggerTypingIndicator chan
+                                        void $ restCallTrace $ TriggerTypingIndicator chan
                                         case cmd of
                                           Reset mode -> do resetMode mode
                                                            pure ""
@@ -233,12 +216,15 @@ backendLoop = forever $ catch (do queue <- use channel
                                           EvalBlock mode blk -> evalBlock mode blk
                                       let res = formatResults outs
                                       case reply of
-                                        Just id -> sendTrace $ EditMessage (chan, id) res Nothing
-                                        _ -> do Message{..} <- send $ CreateMessage chan res
-                                                assign (recentMsgs . at (chan, msg) . _Just . _3) (Just messageId)
+                                        Just id -> void $ restCallTrace $ EditMessage (chan, id) res Nothing
+                                        _ -> do res <- restCallTrace $ CreateMessage chan res
+                                                case res of
+                                                  Left e -> pure ()
+                                                  Right (Message{..}) ->
+                                                    assign (recentMsgs . at (chan, msg) . _Just . _3) (Just messageId)
                                     Nothing -> pure ())
                               (\e -> do logM "Exception in backendLoop:"
-                                        logShowM (e :: SomeException))
+                                        logM (show (e :: SomeException)))
 
 formatResults :: [Text] -> Text
 formatResults res = if T.null msg then react_check else msg
