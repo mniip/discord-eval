@@ -39,6 +39,7 @@ import DupQueue
 
 getAuth :: IO Auth
 getAuth = Auth <$> read <$> readFile "auth.conf"
+login = loginRest =<< getAuth
 
 prune_messages_after_seconds = 10 * 60
 max_blocks_per_msg = 10
