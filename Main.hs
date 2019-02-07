@@ -102,9 +102,9 @@ frontLoop :: EvalM ()
 frontLoop = forever $ catch (do bot <- liftIO $ loginRestGateway =<< getAuth
                                 void $ finally (do use botHandle >>= \h -> liftIO $ putMVar h bot
                                                    logM "Connected"
-                                                   eventLoop
-                                                   use botHandle >>= \h -> liftIO $ takeMVar h)
-                                               (do logM "Disconnected"
+                                                   eventLoop)
+                                               (do use botHandle >>= \h -> liftIO $ takeMVar h
+                                                   logM "Disconnected"
                                                    liftIO $ stopDiscord bot))
                             (\e -> do logM "Exception in mainLoop:"
                                       logM (show (e :: SomeException))
