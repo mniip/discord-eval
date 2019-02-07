@@ -118,7 +118,6 @@ eventLoop = do bot <- use botHandle >>= liftIO . readMVar
                                    eventLoop
                  Left err -> do logM "Exception in nextEvent:"
                                 logM (show err)
-                                liftIO $ threadDelay $ 10 * 10^6
 
 parseMode :: Text -> Mode
 parseMode t = case T.toLower t of
