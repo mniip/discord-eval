@@ -75,9 +75,12 @@ logM :: String -> EvalM ()
 logM s = liftIO $ do time <- getCurrentTime
                      putStrLn $ show time ++ ": " ++ s
 
-restCallTrace :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallException a)
-restCallTrace req = do bot <- use botHandle >>= liftIO . readMVar
-                       resp <- liftIO $ restCall bot req
+sendRest :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallException a)
+sendRest req = do bot <- use botHandle >>= liftIO . readMVar
+                  liftIO $ restCall bot req
+
+sendRestTrace :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallException a)
+sendRestTrace req = do resp <- sendRest req
                        case resp of
                          Left err -> do logM "Error while calling REST:"
                                         logM (show err)
