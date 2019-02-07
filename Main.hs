@@ -177,7 +177,7 @@ handleEvent (MessageCreate Message{..}) = do
     queue <- use channel
     status <- liftIO $ writeUChan queue (messageChannel, messageId)
     when (status == Just False) $ do
-      void $ restCallTrace $ CreateReaction (messageChannel, messageId) react_wait
+      void $ sendRestTrace $ CreateReaction (messageChannel, messageId) react_wait
 handleEvent (MessageUpdate Message{..}) = do
   pruneMessages
   x <- use (recentMsgs . at (messageChannel, messageId))
@@ -186,32 +186,32 @@ handleEvent (MessageUpdate Message{..}) = do
                              , oldreq /= req
                              -> if null req
                                 then case reply of
-                                  Just id -> do void $ restCallTrace $ DeleteMessage (messageChannel, id)
+                                  Just id -> do void $ sendRestTrace $ DeleteMessage (messageChannel, id)
                                                 assign (recentMsgs . at (messageChannel, messageId) . _Just . _3) Nothing
                                   _ -> pure ()
                                 else do assign (recentMsgs . at (messageChannel, messageId)) $ Just (ts, req, reply)
                                         queue <- use channel
                                         status <- liftIO $ writeUChan queue (messageChannel, messageId)
                                         when (status == Just False) $ do
-                                          void $ restCallTrace $ CreateReaction (messageChannel, messageId) react_wait
+                                          void $ sendRestTrace $ CreateReaction (messageChannel, messageId) react_wait
     _ -> pure ()
 handleEvent (MessageDelete messageChannel messageId) = do
   pruneMessages
   x <- use (recentMsgs . at (messageChannel, messageId))
   case x of
-    Just (ts, oldreq, Just id) -> void $ restCallTrace $ DeleteMessage (messageChannel, id)
+    Just (ts, oldreq, Just id) -> void $ sendRestTrace $ DeleteMessage (messageChannel, id)
     _ -> pure ()
 handleEvent _ = pure ()
 
 backendLoop :: EvalM ()
 backendLoop = forever $ catch (do queue <- use channel
                                   (chan, msg) <- liftIO $ readUChan queue
-                                  void $ restCallTrace $ DeleteOwnReaction (chan, msg) react_wait
+                                  void $ sendRestTrace $ DeleteOwnReaction (chan, msg) react_wait
                                   x <- use (recentMsgs . at (chan, msg))
                                   case x of
                                     Just (_, req, reply) -> do
                                       outs <- forM req $ \cmd -> do
-                                        void $ restCallTrace $ TriggerTypingIndicator chan
+                                        void $ sendRestTrace $ TriggerTypingIndicator chan
                                         case cmd of
                                           Reset mode -> do resetMode mode
                                                            pure ""
@@ -219,8 +219,8 @@ backendLoop = forever $ catch (do queue <- use channel
                                           EvalBlock mode blk -> evalBlock mode blk
                                       let res = formatResults outs
                                       case reply of
-                                        Just id -> void $ restCallTrace $ EditMessage (chan, id) res Nothing
-                                        _ -> do res <- restCallTrace $ CreateMessage chan res
+                                        Just id -> void $ sendRestTrace $ EditMessage (chan, id) res Nothing
+                                        _ -> do res <- sendRestTrace $ CreateMessage chan res
                                                 case res of
                                                   Left e -> pure ()
                                                   Right (Message{..}) ->
