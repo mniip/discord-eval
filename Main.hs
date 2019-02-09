@@ -71,10 +71,6 @@ instance MonadState EvalState EvalM where
     where forcing (b, a) = do a' <- evaluate a
                               pure (a', b)
 
-withBot :: (BotHandle -> EvalM a) -> EvalM a
-withBot = bracket (use botHandle >>= \h -> liftIO $ takeMVar h)
-                  (\bot -> use botHandle >>= \h -> liftIO $ putMVar h bot)
-
 logM :: String -> EvalM ()
 logM s = liftIO $ do time <- getCurrentTime
                      putStrLn $ show time ++ ": " ++ s
@@ -88,7 +84,9 @@ traceM = logShowM callStack
 instance Exception RestCallException
 
 sendEither :: (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallException a)
-sendEither req = withBot (\bot -> liftIO $ restCall bot req)
+sendEither req = do bh <- use botHandle
+                    bot <- liftIO (readMVar bh)
+                    liftIO $ restCall bot req
 
 sendTrace :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM ()
 sendTrace req = do resp <- sendEither req
