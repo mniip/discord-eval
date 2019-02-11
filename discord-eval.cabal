@@ -27,5 +27,7 @@ executable discord-eval
                        text,
                        stm,
                        aeson,
-                       process
+                       process,
+                       bytestring,
+                       network
   default-language:    Haskell2010

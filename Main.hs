@@ -6,6 +6,7 @@
 
 module Main where
 
+import Control.Arrow
 import Control.Exception (evaluate)
 import Control.Concurrent
 import Control.Concurrent.STM
@@ -25,6 +26,8 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding
+import Data.Text.Encoding.Error
 import qualified Data.Text.IO as T
 import Data.Time.Clock
 import Data.Time.Clock.POSIX
@@ -36,6 +39,7 @@ import System.Process
 import Discord
 
 import DupQueue
+import Pastebin
 
 getAuth :: IO Auth
 getAuth = Auth <$> read <$> readFile "auth.conf"
@@ -46,7 +50,8 @@ max_blocks_per_msg = 10
 max_chars_per_msg = 2000
 react_wait = "\x231B"
 react_check = "\x2705"
-max_output = 1000
+max_output = 1024*1024
+paste_url_length = 25
 sandbox_cmd = "cat"
 sandbox_conf = "--"
 
@@ -231,36 +236,39 @@ backendLoop = forever $ catch (do queue <- use channel
                                                            pure ""
                                           EvalLine mode ln -> evalLine mode ln
                                           EvalBlock mode blk -> evalBlock mode blk
-                                      let res = formatResults outs
+                                      text <- formatResults outs
                                       case reply of
-                                        Just id -> sendTrace $ EditMessage (chan, id) res Nothing
-                                        _ -> do Message{..} <- send $ CreateMessage chan res
+                                        Just id -> sendTrace $ EditMessage (chan, id) text Nothing
+                                        _ -> do Message{..} <- send $ CreateMessage chan text
                                                 assign (recentMsgs . at (chan, msg) . _Just . _3) (Just messageId)
                                     Nothing -> pure ())
                               (\e -> do logM "Exception in backendLoop:"
                                         logShowM (e :: SomeException))
 
-formatResults :: [Text] -> Text
-formatResults res = if T.null msg then react_check else msg
+formatResults :: [Text] -> EvalM Text
+formatResults res = do msg <- T.concat <$> mapM format nonempty
+                       pure $ if T.null msg then react_check else msg
   where
-    nonempty = zip [0..] $ filter (not . T.null) $ map (T.replace "``" "``\x200D" . T.filter (\x -> x == '\n' || not (isControl x))) res
+    nonempty = zip [0..] $ filter (not . T.null . fst) $ map (sanitize &&& id) res
     
-    sorted = sortBy (comparing $ T.length . snd) nonempty
+    sanitize s = let r = T.replace "``" "``\x200D" $ T.filter (\x -> x == '\n' || not (isControl x)) s
+                 in if T.isSuffixOf "`" r then T.append r "\x200D" else r
     
-    accumulate :: Int -> S.Set Int -> [(Int, Text)] -> S.Set Int
+    sorted = sortBy (comparing $ T.length . fst . snd) nonempty
+    
+    accumulate :: Int -> Set Int -> [(Int, (Text, Text))] -> Set Int
     accumulate n s [] = s
-    accumulate n s ((i, x):xs)
-      | n + 8 + T.length x < max_chars_per_msg - 10 * length xs
+    accumulate n s ((i, (x, _)):xs)
+      | n + 8 + T.length x < max_chars_per_msg - paste_url_length * length xs
       = accumulate (n + 8 + T.length x) (S.insert i s) xs
       | otherwise = s
     
     small = accumulate 0 S.empty sorted
 
-    format (i, x)
-      | i `S.member` small = T.concat ["```\n", x, "```\n"]
-      | otherwise = " ... "
-
-    msg = T.concat $ map format nonempty
+    format (i, (san, orig))
+      | i `S.member` small = pure $ T.concat ["```\n", san, "```\n"]
+      | otherwise = do link <- liftIO $ paste $ encodeUtf8 orig -- TODO: don't double encode
+                       pure $ T.concat ["<", decodeUtf8With lenientDecode link, ">\n"]
 
 resetMode :: Mode -> EvalM ()
 resetMode HaskellEval = launchWithData (proc sandbox_cmd [sandbox_conf, "kill", "Dghci"]) "" >> pure ()
