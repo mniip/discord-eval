@@ -14,7 +14,7 @@ cabal-version:       >=1.10
 
 executable discord-eval
   main-is:             Main.hs
-  other-modules:       DupQueue
+  other-modules:       DupQueue, Pastebin
   build-depends:       base == 4.*,
                        discord-haskell,
                        containers,
