@@ -2,7 +2,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Pastebin where
 
-import Control.Exception
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Network.Socket
@@ -10,6 +9,9 @@ import Network.Socket.ByteString as NBS
 
 pastebin_addr = "tcp.st"
 pastebin_port = 7777
+
+pasteUrlLength :: Int
+pasteUrlLength = 25
 
 paste :: ByteString -> IO ByteString
 paste text = do addrs <- getAddrInfo Nothing (Just pastebin_addr) (Just $ show pastebin_port)

@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -7,15 +8,11 @@
 module Main where
 
 import Control.Arrow
-import Control.Exception (evaluate)
 import Control.Concurrent
-import Control.Concurrent.STM
 import Control.Lens
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
-import Control.Monad.State.Class
-import Control.Monad.Trans.Reader
 import Data.Aeson
 import Data.Char
 import Data.List
@@ -30,30 +27,20 @@ import Data.Text.Encoding
 import Data.Text.Encoding.Error
 import qualified Data.Text.IO as T
 import Data.Time.Clock
-import Data.Time.Clock.POSIX
-import Data.Tuple
 import GHC.Stack
 import System.IO
 import System.Process
+import Waargonaut
+import Waargonaut.Types hiding (elem)
 
 import Discord
 
 import DupQueue
+import JsonUtil
 import Pastebin
+import StateM
 
-getAuth :: IO Auth
-getAuth = Auth <$> read <$> readFile "auth.conf"
-login = loginRest =<< getAuth
-
-prune_messages_after_seconds = 10 * 60
-max_blocks_per_msg = 10
-max_chars_per_msg = 2000
-react_wait = "\x231B"
-react_check = "\x2705"
-max_output = 1024*1024
-paste_url_length = 25
-sandbox_cmd = "cat"
-sandbox_conf = "--"
+config_file = "eval.conf"
 
 type BotHandle = (RestChan, Gateway, [ThreadIdType])
 data Mode = HaskellEval | Haskell | C | Shell deriving (Eq, Show)
@@ -61,24 +48,13 @@ data Command = Reset Mode | EvalLine Mode Text | EvalBlock Mode Text deriving (E
 type ParsedReq = [Command]
 
 data EvalState = EvalState
-  { _botHandle :: MVar BotHandle
+  { _botHandle :: BotHandle
   , _recentMsgs :: Map (Snowflake, Snowflake) (UTCTime, ParsedReq, Maybe Snowflake)
   , _channel :: UChan (Snowflake, Snowflake)
   }
 makeLenses ''EvalState
 
-newtype EvalM a = EvalM { runEvalM :: ReaderT (MVar EvalState) IO a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadThrow, MonadCatch, MonadMask)
-
-instance MonadState EvalState EvalM where
-  get = EvalM $ ReaderT readMVar
-  state f = EvalM $ ReaderT (`modifyMVar` forcing . f)
-    where forcing (b, a) = do a' <- evaluate a
-                              pure (a', b)
-
-withBot :: (BotHandle -> EvalM a) -> EvalM a
-withBot = bracket (use botHandle >>= \h -> liftIO $ takeMVar h)
-                  (\bot -> use botHandle >>= \h -> liftIO $ putMVar h bot)
+type EvalM = StateM Json EvalState
 
 logM :: String -> EvalM ()
 logM s = liftIO $ do time <- getCurrentTime
@@ -93,7 +69,7 @@ traceM = logShowM callStack
 instance Exception RestCallException
 
 sendEither :: (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallException a)
-sendEither req = withBot (\bot -> liftIO $ restCall bot req)
+sendEither req = use (dynamic . botHandle) >>= \bot -> liftIO $ restCall bot req
 
 sendTrace :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM ()
 sendTrace req = do resp <- sendEither req
@@ -111,24 +87,25 @@ send req = do resp <- sendEither req
 
 main = do h <- newEmptyMVar
           c <- newUChan
-          env <- newMVar $ EvalState { _botHandle = h
-                                     , _recentMsgs = M.empty
-                                     , _channel = c
-                                     }
-          forkIO $ runReaderT (runEvalM backendLoop) env
-          runReaderT (runEvalM mainLoop) env
-  where mainLoop = forever $ catch (do bot <- liftIO $ loginRestGateway =<< getAuth
-                                       finally (do use botHandle >>= \h -> liftIO $ putMVar h bot
+          let initEnv = EvalState { _botHandle = error "Not connected"
+                                  , _recentMsgs = M.empty
+                                  , _channel = c
+                                  }
+          evalStateM (readJsonFile config_file) (writeJsonFile config_file) initEnv $ do
+            forkStateM backendLoop
+            mainLoop
+  where mainLoop = forever $ catch (do Just !auth <- preuse (persistent . oat "auth" . _Just . jtext)
+                                       bot <- liftIO $ loginRestGateway $ Auth auth
+                                       finally (do assign (dynamic . botHandle) bot
                                                    logM "Connected"
-                                                   eventLoop
-                                                   use botHandle >>= \h -> liftIO $ takeMVar h)
+                                                   eventLoop)
                                                (do logM "Disconnected"
                                                    liftIO $ stopDiscord bot)
                                        pure ())
                                    (\e -> do logM "Exception in mainLoop:"
                                              logShowM (e :: SomeException)
                                              liftIO $ threadDelay $ 10 * 1000000)
-        eventLoop = do bot <- use botHandle >>= liftIO . readMVar
+        eventLoop = do bot <- use (dynamic . botHandle)
                        everr <- liftIO $ nextEvent bot
                        case everr of
                          Right event -> do catch (handleEvent event)
@@ -152,9 +129,9 @@ parseMode t = case T.toLower t of
   "shell" -> Shell
   _ -> HaskellEval
 
-parseMessage :: Text -> ParsedReq
-parseMessage t | Just ('>', cmd) <- T.uncons t
-               , (m, rest) <- T.break (\x -> x == '`' || isSpace x) cmd = take max_blocks_per_msg $ go (parseMode m) rest
+parseMessage :: Int -> Text -> ParsedReq
+parseMessage maxBlocks t | Just ('>', cmd) <- T.uncons t
+                         , (m, rest) <- T.break (\x -> x == '`' || isSpace x) cmd = take maxBlocks $ go (parseMode m) rest
   where go mode t | Just next <- T.stripPrefix "!reset" t
                   = Reset mode : go mode next
                   | Just rest <- T.stripPrefix "```" t
@@ -180,53 +157,66 @@ parseMessage t | Just ('>', cmd) <- T.uncons t
                           | otherwise = (Nothing, t)
         stripControl c | isControl c = ' '
                        | otherwise = c
-parseMessage _ = []
+parseMessage _ _ = []
 
 pruneMessages :: EvalM ()
 pruneMessages = do time <- liftIO getCurrentTime
-                   modifying recentMsgs (M.filter (\(ts, _, _) -> diffUTCTime time ts < fromInteger prune_messages_after_seconds))
+                   Just !secs <- preuse (persistent . oat "pruneAfterSeconds" . _Just . jint)
+                   modifying (dynamic . recentMsgs)
+                     (M.filter (\(ts, _, _) -> diffUTCTime time ts < fromIntegral secs))
+
+checkTest :: Maybe Snowflake -> EvalM () -> EvalM ()
+checkTest mb c = do Just !guilds <- preuses (persistent . oat "testGuilds" . _Just . jarr)
+                                            (toListOf $ folded . jint . to fromIntegral)
+                    Just !test <- preuse (persistent . oat "test" . _Just . jbool)
+                    when (test == any (`elem` guilds) mb) $ c
 
 handleEvent :: HasCallStack => Event -> EvalM ()
-handleEvent (MessageCreate Message{..}) = do
+handleEvent (MessageCreate Message{..}) = checkTest messageGuild $ do
   pruneMessages
   time <- liftIO getCurrentTime
-  let req = parseMessage messageText
-  assign (recentMsgs . at (messageChannel, messageId)) $ Just (time, req, Nothing)
+  Just !maxBlocks <- preuse (persistent . oat "maxBlocksPerMsg" . _Just . jint)
+  let req = parseMessage maxBlocks messageText
+  assign (dynamic . recentMsgs . at (messageChannel, messageId)) $ Just (time, req, Nothing)
   unless (null req) $ do
-    queue <- use channel
+    queue <- use (dynamic . channel)
     status <- liftIO $ writeUChan queue (messageChannel, messageId)
     when (status == Just False) $ do
-      sendTrace $ CreateReaction (messageChannel, messageId) react_wait
-handleEvent (MessageUpdate Message{..}) = do
+      Just !wait <- preuse (persistent . oat "reactWait" . _Just . jtext)
+      sendTrace $ CreateReaction (messageChannel, messageId) wait
+handleEvent (MessageUpdate Message{..}) = checkTest messageGuild $ do
   pruneMessages
-  x <- use (recentMsgs . at (messageChannel, messageId))
+  x <- use (dynamic . recentMsgs . at (messageChannel, messageId))
+  Just !maxBlocks <- preuse (persistent . oat "maxBlocksPerMsg" . _Just . jint)
   case x of
-    Just (ts, oldreq, reply) | req <- parseMessage messageText
+    Just (ts, oldreq, reply) | req <- parseMessage maxBlocks messageText
                              , oldreq /= req
                              -> if null req
                                 then case reply of
                                   Just id -> do sendTrace $ DeleteMessage (messageChannel, id)
-                                                assign (recentMsgs . at (messageChannel, messageId) . _Just . _3) Nothing
+                                                assign (dynamic . recentMsgs . at (messageChannel, messageId) . _Just . _3) Nothing
                                   _ -> pure ()
-                                else do assign (recentMsgs . at (messageChannel, messageId)) $ Just (ts, req, reply)
-                                        queue <- use channel
+                                else do assign (dynamic . recentMsgs . at (messageChannel, messageId)) $ Just (ts, req, reply)
+                                        queue <- use (dynamic . channel)
                                         status <- liftIO $ writeUChan queue (messageChannel, messageId)
                                         when (status == Just False) $ do
-                                          sendTrace $ CreateReaction (messageChannel, messageId) react_wait
+                                          Just !wait <- preuse (persistent . oat "reactWait" . _Just . jtext)
+                                          sendTrace $ CreateReaction (messageChannel, messageId) wait
     _ -> pure ()
 handleEvent (MessageDelete messageChannel messageId) = do
   pruneMessages
-  x <- use (recentMsgs . at (messageChannel, messageId))
+  x <- use (dynamic . recentMsgs . at (messageChannel, messageId))
   case x of
     Just (ts, oldreq, Just id) -> sendTrace $ DeleteMessage (messageChannel, id)
     _ -> pure ()
 handleEvent _ = pure ()
 
 backendLoop :: EvalM ()
-backendLoop = forever $ catch (do queue <- use channel
+backendLoop = forever $ catch (do queue <- use (dynamic . channel)
                                   (chan, msg) <- liftIO $ readUChan queue
-                                  sendTrace $ DeleteOwnReaction (chan, msg) react_wait
-                                  x <- use (recentMsgs . at (chan, msg))
+                                  Just !wait <- preuse (persistent . oat "reactWait" . _Just . jtext)
+                                  sendTrace $ DeleteOwnReaction (chan, msg) wait
+                                  x <- use (dynamic . recentMsgs . at (chan, msg))
                                   case x of
                                     Just (_, req, reply) -> do
                                       outs <- forM req $ \cmd -> do
@@ -240,68 +230,78 @@ backendLoop = forever $ catch (do queue <- use channel
                                       case reply of
                                         Just id -> sendTrace $ EditMessage (chan, id) text Nothing
                                         _ -> do Message{..} <- send $ CreateMessage chan text
-                                                assign (recentMsgs . at (chan, msg) . _Just . _3) (Just messageId)
+                                                assign (dynamic . recentMsgs . at (chan, msg) . _Just . _3) (Just messageId)
                                     Nothing -> pure ())
                               (\e -> do logM "Exception in backendLoop:"
                                         logShowM (e :: SomeException))
 
 formatResults :: [Text] -> EvalM Text
-formatResults res = do msg <- T.concat <$> mapM format nonempty
-                       pure $ if T.null msg then react_check else msg
-  where
-    nonempty = zip [0..] $ filter (not . T.null . fst) $ map (sanitize &&& id) res
-    
-    sanitize s = let r = T.replace "``" "``\x200D" $ T.filter (\x -> x == '\n' || not (isControl x)) s
-                 in if T.isSuffixOf "`" r then T.append r "\x200D" else r
-    
-    sorted = sortBy (comparing $ T.length . fst . snd) nonempty
-    
-    accumulate :: Int -> Set Int -> [(Int, (Text, Text))] -> Set Int
-    accumulate n s [] = s
-    accumulate n s ((i, (x, _)):xs)
-      | n + 8 + T.length x < max_chars_per_msg - paste_url_length * length xs
-      = accumulate (n + 8 + T.length x) (S.insert i s) xs
-      | otherwise = s
-    
-    small = accumulate 0 S.empty sorted
+formatResults res = do Just !maxChars <- preuse (persistent . oat "maxCharsPerMsg" . _Just . jint)
+                       msg <- doFormat maxChars
+                       if T.null msg
+                       then do Just !check <- preuse (persistent . oat "reactCheck" . _Just . jtext)
+                               pure check
+                       else pure msg
+  where doFormat maxChars = T.concat <$> mapM format nonempty
+          where
+            nonempty = zip [0..] $ filter (not . T.null . fst) $ map (sanitize &&& id) res
 
-    format (i, (san, orig))
-      | i `S.member` small = pure $ T.concat ["```\n", san, "```\n"]
-      | otherwise = do link <- liftIO $ paste $ encodeUtf8 orig -- TODO: don't double encode
-                       pure $ T.concat ["<", decodeUtf8With lenientDecode link, ">\n"]
+            sanitize s = let r = T.replace "``" "``\x200D" $ T.filter (\x -> x == '\n' || not (isControl x)) s
+                         in if T.isSuffixOf "`" r then T.append r "\x200D" else r
+
+            sorted = sortBy (comparing $ T.length . fst . snd) nonempty
+
+            accumulate :: Int -> Set Int -> [(Int, (Text, Text))] -> Set Int
+            accumulate n s [] = s
+            accumulate n s ((i, (x, _)):xs)
+              | n + 8 + T.length x < maxChars - (3 + pasteUrlLength) * length xs
+              = accumulate (n + 8 + T.length x) (S.insert i s) xs
+              | otherwise = s
+
+            small = accumulate 0 S.empty sorted
+
+            format (i, (san, orig))
+              | i `S.member` small = pure $ T.concat ["```\n", san, "```\n"]
+              | otherwise = do link <- liftIO $ paste $ encodeUtf8 orig -- TODO: don't double encode
+                               pure $ T.concat ["<", decodeUtf8With lenientDecode link, ">\n"]
 
 resetMode :: Mode -> EvalM ()
-resetMode HaskellEval = launchWithData (proc sandbox_cmd [sandbox_conf, "kill", "Dghci"]) "" >> pure ()
+resetMode HaskellEval = launchWithData ["kill", "Dghci"] "" >> pure ()
 resetMode _ = pure ()
 
 evalLine :: Mode -> Text -> EvalM Text
-evalLine HaskellEval line = launchWithLine (proc sandbox_cmd [sandbox_conf, "Dghci"]) line
+evalLine HaskellEval line = launchWithLine ["Dghci"] line
 evalLine mode line = evalBlock mode line
 
 evalBlock :: Mode -> Text -> EvalM Text
-evalBlock HaskellEval block = fmap (T.take max_output . T.concat) $ mapM (evalLine HaskellEval) $ [":{"] ++ T.lines block ++ [":}"]
-evalBlock C block = launchWithData (proc sandbox_cmd [sandbox_conf, "rungcc"]) block
-evalBlock Shell block = launchWithData (proc sandbox_cmd [sandbox_conf, "bash"]) block
-evalBlock Haskell block = launchWithData (proc sandbox_cmd [sandbox_conf, "runghc"]) block
+evalBlock HaskellEval block = do
+  Just !maxChars <- preuse (persistent . oat "maxOutput" . _Just . jint)
+  fmap (T.take maxChars . T.concat) $ mapM (evalLine HaskellEval) $ [":{"] ++ T.lines block ++ [":}"]
+evalBlock C block = launchWithData ["rungcc"] block
+evalBlock Shell block = launchWithData ["bash"] block
+evalBlock Haskell block = launchWithData ["runghc"] block
 
-launchWithLine :: HasCallStack => CreateProcess -> Text -> EvalM Text
-launchWithLine cp s = launchWithData cp (T.filter (/= '\n') s `T.snoc` '\n')
+launchWithLine :: HasCallStack => [String] -> Text -> EvalM Text
+launchWithLine args s = launchWithData args (T.filter (/= '\n') s `T.snoc` '\n')
 
-launchWithData :: HasCallStack => CreateProcess -> Text -> EvalM Text
-launchWithData cp s = liftIO $ do
-  T.writeFile "input" s
-  input <- openBinaryFile "input" ReadMode
-  (outr, outw) <- createPipe
-  (_, _, _, p) <- createProcess cp { std_in = UseHandle input
-                                                    , std_out = UseHandle outw
-                                                    , std_err = UseHandle outw
-                                                    , close_fds = True
-                                                    }
-  finally (go "" outr)
-          (do hClose outr
-              waitForProcess p)
-  where go rd hdl | T.length rd >= max_output = pure $ T.take max_output rd
-                  | otherwise = do ch <- T.hGetChunk hdl
-                                   if T.null ch
-                                   then pure rd
-                                   else go (T.append rd ch) hdl
+launchWithData :: HasCallStack => [String] -> Text -> EvalM Text
+launchWithData args s = do
+  Just !cmd <- preuse (persistent . oat "sandboxCmd" . _Just . jstring)
+  Just !conf <- preuse (persistent . oat "sandboxConf" . _Just . jstring)
+  liftIO $ T.writeFile "input" s
+  input <- liftIO $ openBinaryFile "input" ReadMode
+  (outr, outw) <- liftIO createPipe
+  (_, _, _, p) <- liftIO $ createProcess (proc cmd (conf:args)) { std_in = UseHandle input
+                                                                , std_out = UseHandle outw
+                                                                , std_err = UseHandle outw
+                                                                , close_fds = True
+                                                                }
+  Just !maxChars <- preuse (persistent . oat "maxOutput" . _Just . jint)
+  liftIO $ finally (go maxChars "" outr)
+                   (do hClose outr
+                       waitForProcess p)
+  where go maxChars rd hdl | T.length rd >= maxChars = pure $ T.take maxChars rd
+                           | otherwise = do ch <- T.hGetChunk hdl
+                                            if T.null ch
+                                            then pure rd
+                                            else go maxChars (T.append rd ch) hdl
