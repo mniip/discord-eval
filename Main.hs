@@ -14,6 +14,8 @@ import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
 import Data.Aeson
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as B
 import Data.Char
 import Data.List
 import Data.Map (Map)
@@ -25,7 +27,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding
 import Data.Text.Encoding.Error
-import qualified Data.Text.IO as T
 import Data.Time.Clock
 import GHC.Stack
 import System.IO
@@ -211,6 +212,12 @@ handleEvent (MessageDelete messageChannel messageId) = do
     _ -> pure ()
 handleEvent _ = pure ()
 
+toBS :: Text -> ByteString
+toBS = encodeUtf8
+
+fromBS :: ByteString -> Text
+fromBS = decodeUtf8With (replace '?')
+
 backendLoop :: EvalM ()
 backendLoop = forever $ catch (do queue <- use (dynamic . channel)
                                   (chan, msg) <- liftIO $ readUChan queue
@@ -224,8 +231,8 @@ backendLoop = forever $ catch (do queue <- use (dynamic . channel)
                                         case cmd of
                                           Reset mode -> do resetMode mode
                                                            pure ""
-                                          EvalLine mode ln -> evalLine mode ln
-                                          EvalBlock mode blk -> evalBlock mode blk
+                                          EvalLine mode ln -> fromBS <$> evalLine mode (toBS ln)
+                                          EvalBlock mode blk -> fromBS <$> evalBlock mode (toBS blk)
                                       text <- formatResults outs
                                       case reply of
                                         Just id -> sendTrace $ EditMessage (chan, id) text Nothing
@@ -269,26 +276,26 @@ resetMode :: Mode -> EvalM ()
 resetMode HaskellEval = launchWithData ["kill", "Dghci"] "" >> pure ()
 resetMode _ = pure ()
 
-evalLine :: Mode -> Text -> EvalM Text
+evalLine :: Mode -> ByteString -> EvalM ByteString
 evalLine HaskellEval line = launchWithLine ["Dghci"] line
 evalLine mode line = evalBlock mode line
 
-evalBlock :: Mode -> Text -> EvalM Text
+evalBlock :: Mode -> ByteString -> EvalM ByteString
 evalBlock HaskellEval block = do
   Just !maxChars <- preuse (persistent . oat "maxOutput" . _Just . jint)
-  fmap (T.take maxChars . T.concat) $ mapM (evalLine HaskellEval) $ [":{"] ++ T.lines block ++ [":}"]
+  fmap (B.take maxChars . B.concat) $ mapM (evalLine HaskellEval) $ [":{"] ++ B.split (fromIntegral $ fromEnum '\n') block ++ [":}"]
 evalBlock C block = launchWithData ["rungcc"] block
 evalBlock Shell block = launchWithData ["bash"] block
 evalBlock Haskell block = launchWithData ["runghc"] block
 
-launchWithLine :: HasCallStack => [String] -> Text -> EvalM Text
-launchWithLine args s = launchWithData args (T.filter (/= '\n') s `T.snoc` '\n')
+launchWithLine :: HasCallStack => [String] -> ByteString -> EvalM ByteString
+launchWithLine args s = launchWithData args (B.filter (/= fromIntegral (fromEnum '\n')) s `B.snoc` fromIntegral (fromEnum '\n'))
 
-launchWithData :: HasCallStack => [String] -> Text -> EvalM Text
+launchWithData :: HasCallStack => [String] -> ByteString -> EvalM ByteString
 launchWithData args s = do
   Just !cmd <- preuse (persistent . oat "sandboxCmd" . _Just . jstring)
   Just !conf <- preuse (persistent . oat "sandboxConf" . _Just . jstring)
-  liftIO $ T.writeFile "input" s
+  liftIO $ B.writeFile "input" s
   input <- liftIO $ openBinaryFile "input" ReadMode
   (outr, outw) <- liftIO createPipe
   (_, _, _, p) <- liftIO $ createProcess (proc cmd (conf:args)) { std_in = UseHandle input
@@ -297,11 +304,6 @@ launchWithData args s = do
                                                                 , close_fds = True
                                                                 }
   Just !maxChars <- preuse (persistent . oat "maxOutput" . _Just . jint)
-  liftIO $ finally (go maxChars "" outr)
+  liftIO $ finally (B.hGet outr maxChars)
                    (do hClose outr
                        waitForProcess p)
-  where go maxChars rd hdl | T.length rd >= maxChars = pure $ T.take maxChars rd
-                           | otherwise = do ch <- T.hGetChunk hdl
-                                            if T.null ch
-                                            then pure rd
-                                            else go maxChars (T.append rd ch) hdl
