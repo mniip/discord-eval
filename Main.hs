@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -58,8 +59,13 @@ makeLenses ''EvalState
 type EvalM = StateM Json EvalState
 
 logM :: String -> EvalM ()
-logM s = liftIO $ do time <- getCurrentTime
-                     putStrLn $ show time ++ ": " ++ s
+logM s = do
+  time <- liftIO getCurrentTime
+  let line = unlines $ map (show time ++) $ zipWith (++) (": " : repeat "> ") $ lines s
+  preuse (persistent . oat "log" . _Just . jstring) >>= \case
+    Just logFile -> liftIO $ appendFile logFile line
+    Nothing -> pure ()
+  liftIO $ putStr line
 
 logShowM :: Show a => a -> EvalM ()
 logShowM = logM . show

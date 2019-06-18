@@ -15,7 +15,7 @@ executable discord-eval
   main-is:             Main.hs
   other-modules:       DupQueue, JsonUtil, Pastebin, StateM
   build-depends:       base == 4.*,
-                       discord-haskell,
+                       discord-haskell < 0.8,
                        containers,
                        transformers,
                        mtl,
