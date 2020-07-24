@@ -56,6 +56,7 @@ data RecentMsg = RecentMsg
   , _msgRequest    :: ParsedReq
   , _msgMentionsMe :: Bool
   , _msgMyResponse :: Maybe MessageId
+  , _msgRequestor  :: UserId
   } deriving Show
 makeLenses ''RecentMsg
 
@@ -205,6 +206,7 @@ handleEvent (MessageCreate Message{..}) = do
         , _msgRequest = req
         , _msgMentionsMe = mentionsMe
         , _msgMyResponse = Nothing
+        , _msgRequestor = userId messageAuthor
         }
       unless (null req) $ do
         queue <- use (dynamic . channel)
@@ -257,14 +259,14 @@ handleEvent (MessageReactionAdd ReactionInfo{..}) = do
     Just !cancel <- preuse (persistent . oat "reactCancel" . _Just . jtext)
     myId <- getMyId
     when (reactionUserId /= myId && emojiName reactionEmoji == cancel) $ do
-      msgs <- use (dynamic . recentMsgs . to M.toList . to (filter $ filterResponse reactionChannelId reactionMessageId))
+      msgs <- use (dynamic . recentMsgs . to M.toList . to (filter $ filterResponse reactionChannelId reactionMessageId reactionUserId))
       forM_ msgs $ \((chanId, reqId), RecentMsg{..}) -> do
         forM_ _msgMyResponse $ \id -> do
           sendTrace $ DeleteMessage (chanId, id)
         assign (dynamic . recentMsgs . at (chanId, reqId)) Nothing
     where
-      filterResponse chanId msgId ((chanId', _), msg)
-        = chanId == chanId' && msg ^. msgMyResponse == Just msgId
+      filterResponse chanId msgId userId ((chanId', _), msg)
+        = chanId == chanId' && msg ^. msgMyResponse == Just msgId && msg ^. msgRequestor == userId
 handleEvent _ = pure ()
 
 toBS :: Text -> ByteString
