@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -45,6 +46,18 @@ rehashStateM :: StateM p d ()
 rehashStateM = StateM $ ReaderT $ \StateMR{..} -> modifyMVar_ stateMVar $ \ms -> do
   p <- stateRead
   pure (ms { _persistent = p })
+
+unliftingStateM :: IO p -> (p -> IO ()) -> d -> ((forall x. StateM p d x -> IO x) -> IO a) -> IO a
+unliftingStateM rd wr d k = do
+  p <- rd
+  mvar <- newMVar $ StateMS { _persistent = p
+                            , _dynamic = d
+                            }
+  k (\(StateM sm) -> runReaderT sm $ StateMR { stateRead = rd
+                                             , stateWrite = wr
+                                             , stateMVar = mvar
+                                             }
+    )
 
 evalStateM :: IO p -> (p -> IO ()) -> d -> StateM p d a -> IO a
 evalStateM rd wr d (StateM f) = do

@@ -2,7 +2,9 @@ module JsonUtil where
 
 import Control.Lens
 import Data.Attoparsec.ByteString
+import Data.Binary.Builder
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Data.Text.Encoding
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -10,6 +12,8 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Builder as TB
 import Waargonaut
 import qualified Waargonaut.Decode as D
+import Waargonaut.Encode.Builder
+import Waargonaut.Encode.Builder.Whitespace
 import Waargonaut.Types
 
 jint :: Traversal Json Json Int Int
@@ -34,4 +38,4 @@ readJsonFile file = do result <- D.parseWith parseOnly parseWaargonaut <$> B.rea
                          Right json -> pure json
 
 writeJsonFile :: String -> Json -> IO ()
-writeJsonFile file = B.writeFile file . encodeUtf8 . TL.toStrict . TB.toLazyText . waargonautBuilder wsBuilder
+writeJsonFile file = B.writeFile file . BL.toStrict . toLazyByteString . waargonautBuilder wsBuilder bsBuilder
