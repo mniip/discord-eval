@@ -1,41 +1,50 @@
+{-# LANGUAGE RankNTypes #-}
 module JsonUtil where
 
 import Control.Lens
+import Data.Aeson
+import Data.Aeson.KeyMap
 import Data.Attoparsec.ByteString
 import Data.Binary.Builder
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Data.Scientific
 import Data.Text.Encoding
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Builder as TB
-import Waargonaut
-import qualified Waargonaut.Decode as D
-import Waargonaut.Encode.Builder
-import Waargonaut.Encode.Builder.Whitespace
-import Waargonaut.Types
+import Data.Vector
 
-jint :: Traversal Json Json Int Int
-jint = _JNum . _1 . _JNumberInt
+jint :: Traversal Value Value Int Int
+jint f (Number n)
+  | Just i <- toBoundedInteger n = Number . fromIntegral <$> f i
+jint _ x = pure x
 
-jtext :: Traversal Json Json Text Text
-jtext = _JStr . _1 . _JStringText
+jtext :: Traversal Value Value Text Text
+jtext f (String s) = String <$> f s
+jtext _ x = pure x
 
-jstring :: Traversal Json Json String String
+jstring :: Traversal Value Value String String
 jstring = jtext . iso T.unpack T.pack
 
-jbool :: Traversal Json Json Bool Bool
-jbool = _JBool . _1
+jbool :: Traversal Value Value Bool Bool
+jbool f (Bool b) = Bool <$> f b
+jbool _ x = pure x
 
-jarr :: Traversal Json Json (JArray WS Json) (JArray WS Json)
-jarr = _JArr . _1
+jarr :: Traversal Value Value (Vector Value) (Vector Value)
+jarr f (Array a) = Array <$> f a
+jarr _ x = pure x
 
-readJsonFile :: String -> IO Json
-readJsonFile file = do result <- D.parseWith parseOnly parseWaargonaut <$> B.readFile file
+oat :: Key -> Traversal Value Value (Maybe Value) (Maybe Value)
+oat k f (Object o) = Object <$> alterF f k o
+oat _ _ x = pure x
+
+readJsonFile :: String -> IO Value
+readJsonFile file = do result <- eitherDecodeFileStrict' file
                        case result of
                          Left err -> error (show err)
                          Right json -> pure json
 
-writeJsonFile :: String -> Json -> IO ()
-writeJsonFile file = B.writeFile file . BL.toStrict . toLazyByteString . waargonautBuilder wsBuilder bsBuilder
+writeJsonFile :: String -> Value -> IO ()
+writeJsonFile = encodeFile

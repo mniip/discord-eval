@@ -14,6 +14,7 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
+import Control.Monad.Reader
 import Data.Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
@@ -32,8 +33,6 @@ import Data.Time.Clock
 import GHC.Stack
 import System.IO
 import System.Process
-import Waargonaut
-import Waargonaut.Types hiding (elem)
 
 import Discord
 import Discord.Requests
@@ -67,7 +66,7 @@ data EvalState = EvalState
   }
 makeLenses ''EvalState
 
-type EvalM = StateM Json EvalState
+type EvalM = StateM Value EvalState
 
 logM :: String -> EvalM ()
 logM s = do
@@ -87,7 +86,7 @@ traceM = logShowM callStack
 instance Exception RestCallErrorCode
 
 sendEither :: (FromJSON a, Request (r a)) => r a -> EvalM (Either RestCallErrorCode a)
-sendEither req = use (dynamic . botHandle) >>= \bot -> liftIO $ restCall bot req
+sendEither req = use (dynamic . botHandle) >>= \bot -> liftIO $ runReaderT (restCall req) bot
 
 sendTrace :: HasCallStack => (FromJSON a, Request (r a)) => r a -> EvalM ()
 sendTrace req = do resp <- sendEither req
@@ -115,11 +114,12 @@ main = do hSetBuffering stdout NoBuffering
             forkIO $ unlift backendLoop
             runDiscord $ RunDiscordOpts
               { discordToken = token
-              , discordOnStart = \handle -> unlift $ do
-                  assign (dynamic . botHandle) $ handle
-              , discordOnEnd = unlift $ do
-                  assign (dynamic . botHandle) $ error "Not connected"
-              , discordOnEvent = \handle event -> do
+              , discordGatewayIntent = def
+              , discordOnStart = ReaderT $ \handle -> do
+                  unlift $ assign (dynamic . botHandle) $ handle
+              , discordOnEnd = do
+                  unlift $ assign (dynamic . botHandle) $ error "Not connected"
+              , discordOnEvent = \event -> ReaderT $ \handle -> do
                   unlift $ do assign (dynamic . botHandle) $ handle
                               logShowM event
                   catch (unlift $ handleEvent event)
@@ -186,22 +186,22 @@ checkTest mb c = do Just !guilds <- preuses (persistent . oat "testGuilds" . _Ju
 getMyId :: EvalM UserId
 getMyId = do
   handle <- use (dynamic . botHandle)
-  cache <- liftIO $ readCache handle
-  pure $ userId $ _currentUser cache
+  cache <- liftIO $ runReaderT readCache handle
+  pure $ userId $ cacheCurrentUser cache
 
 handleEvent :: HasCallStack => Event -> EvalM ()
 handleEvent (MessageCreate Message{..}) = do
-  logM $ "[" ++ maybe "" show messageGuild ++ "] <#" ++ show messageChannel ++ "> <@" ++ show (userId messageAuthor) ++ "> <" ++ T.unpack (userName messageAuthor) ++ "#" ++ T.unpack (userDiscrim messageAuthor) ++ "> " ++ T.unpack messageText ++ " (" ++ show messageId ++ ")"
+  logM $ "[" ++ maybe "" show messageGuildId ++ "] <#" ++ show messageChannelId ++ "> <@" ++ show (userId messageAuthor) ++ "> <" ++ T.unpack (userName messageAuthor) ++ "#" ++ maybe "" T.unpack (userDiscrim messageAuthor) ++ "> " ++ T.unpack messageContent ++ " (" ++ show messageId ++ ")"
   myId <- getMyId
   let mentionsMe = myId `elem` (userId <$> messageMentions)
-  let hasPrefix = T.isPrefixOf ">" messageText
+  let hasPrefix = T.isPrefixOf ">" messageContent
   when (hasPrefix || mentionsMe) $ do
-    checkTest messageGuild $ do
+    checkTest messageGuildId $ do
       pruneMessages
       time <- liftIO getCurrentTime
       Just !maxBlocks <- preuse (persistent . oat "maxBlocksPerMsg" . _Just . jint)
-      let req = parseMessage maxBlocks messageText
-      assign (dynamic . recentMsgs . at (messageChannel, messageId)) $ Just $ RecentMsg
+      let req = parseMessage maxBlocks messageContent
+      assign (dynamic . recentMsgs . at (messageChannelId, messageId)) $ Just $ RecentMsg
         { _msgTime = time
         , _msgRequest = req
         , _msgMentionsMe = mentionsMe
@@ -210,10 +210,10 @@ handleEvent (MessageCreate Message{..}) = do
         }
       unless (null req) $ do
         queue <- use (dynamic . channel)
-        status <- liftIO $ writeUChan queue (messageChannel, messageId)
+        status <- liftIO $ writeUChan queue (messageChannelId, messageId)
         when (status == Just False) $ do
           Just !wait <- preuse (persistent . oat "reactWait" . _Just . jtext)
-          sendTrace $ CreateReaction (messageChannel, messageId) wait
+          sendTrace $ CreateReaction (messageChannelId, messageId) wait
 handleEvent (MessageUpdate messageChannel messageId) = do
   pruneMessages
   x <- use (dynamic . recentMsgs . at (messageChannel, messageId))
@@ -221,18 +221,18 @@ handleEvent (MessageUpdate messageChannel messageId) = do
   case x of
     Just RecentMsg{..} -> do
       Message{..} <- send $ GetChannelMessage (messageChannel, messageId)
-      logM $ "[" ++ maybe "" show messageGuild ++ "] <#" ++ show messageChannel ++ "> <@" ++ show (userId messageAuthor) ++ "> <" ++ T.unpack (userName messageAuthor) ++ "#" ++ T.unpack (userDiscrim messageAuthor) ++ "> " ++ T.unpack messageText ++ " (" ++ show messageId ++ " edited)"
+      logM $ "[" ++ maybe "" show messageGuildId ++ "] <#" ++ show messageChannelId ++ "> <@" ++ show (userId messageAuthor) ++ "> <" ++ T.unpack (userName messageAuthor) ++ "#" ++ maybe "" T.unpack (userDiscrim messageAuthor) ++ "> " ++ T.unpack messageContent ++ " (" ++ show messageId ++ " edited)"
       myId <- getMyId
       let mentionsMe = myId `elem` (userId <$> messageMentions)
-      let req = parseMessage maxBlocks messageText
+      let req = parseMessage maxBlocks messageContent
       assign (dynamic . recentMsgs . at (messageChannel, messageId) . _Just . msgMentionsMe) mentionsMe
       when (_msgRequest /= req) $ do
         if null req
         then case _msgMyResponse of
-          Just id -> do sendTrace $ DeleteMessage (messageChannel, id)
-                        assign (dynamic . recentMsgs . at (messageChannel, messageId) . _Just . msgMyResponse) Nothing
+          Just id -> do sendTrace $ DeleteMessage (messageChannelId, id)
+                        assign (dynamic . recentMsgs . at (messageChannelId, messageId) . _Just . msgMyResponse) Nothing
           _ -> pure ()
-        else do assign (dynamic . recentMsgs . at (messageChannel, messageId) . _Just . msgRequest) req
+        else do assign (dynamic . recentMsgs . at (messageChannelId, messageId) . _Just . msgRequest) req
                 queue <- use (dynamic . channel)
                 status <- liftIO $ writeUChan queue (messageChannel, messageId)
                 when (status == Just False) $ do
@@ -294,7 +294,7 @@ backendLoop = forever $ catch (do queue <- use (dynamic . channel)
                                       Just !cancel <- preuse (persistent . oat "reactCancel" . _Just . jtext)
                                       case _msgMyResponse of
                                         Just id -> do
-                                          sendTrace $ EditMessage (chan, id) text Nothing
+                                          sendTrace $ EditMessage (chan, id) def { messageDetailedContent = text }
                                           if _msgMentionsMe then sendTrace $ DeleteOwnReaction (chan, id) cancel
                                                             else sendTrace $ CreateReaction (chan, id) cancel
                                         _ -> do Message{..} <- send $ CreateMessage chan text
