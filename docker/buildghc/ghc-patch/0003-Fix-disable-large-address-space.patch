@@ -1,0 +1,57 @@
+From a8f0435fc5516ad978064eeabcc24776b6b86351 Mon Sep 17 00:00:00 2001
+From: Cheng Shao <terrorjack@type.dance>
+Date: Sat, 13 May 2023 02:59:25 +0000
+Subject: [PATCH] rts: fix --disable-large-address-space
+
+This patch moves
+ACQUIRE_ALLOC_BLOCK_SPIN_LOCK/RELEASE_ALLOC_BLOCK_SPIN_LOCK from
+Storage.h to HeapAlloc.h. When --disable-large-address-space is passed
+to configure, the code in HeapAlloc.h makes use of these two macros.
+Fixes #23385.
+---
+ rts/sm/HeapAlloc.h | 8 ++++++++
+ rts/sm/Storage.h   | 9 ---------
+ 2 files changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/rts/sm/HeapAlloc.h b/rts/sm/HeapAlloc.h
+index b9f7c468be7..32210d12974 100644
+--- a/rts/sm/HeapAlloc.h
++++ b/rts/sm/HeapAlloc.h
+@@ -10,6 +10,14 @@
+ 
+ #include "BeginPrivate.h"
+ 
++#if defined(THREADED_RTS)
++// needed for HEAP_ALLOCED below
++extern SpinLock gc_alloc_block_sync;
++#endif
++
++#define ACQUIRE_ALLOC_BLOCK_SPIN_LOCK() ACQUIRE_SPIN_LOCK(&gc_alloc_block_sync)
++#define RELEASE_ALLOC_BLOCK_SPIN_LOCK() RELEASE_SPIN_LOCK(&gc_alloc_block_sync)
++
+ /* -----------------------------------------------------------------------------
+    The HEAP_ALLOCED() test.
+ 
+diff --git a/rts/sm/Storage.h b/rts/sm/Storage.h
+index c6046de2c0b..9c86abfc2bf 100644
+--- a/rts/sm/Storage.h
++++ b/rts/sm/Storage.h
+@@ -43,15 +43,6 @@ extern Mutex sm_mutex;
+ #define ASSERT_SM_LOCK()
+ #endif
+ 
+-#if defined(THREADED_RTS)
+-// needed for HEAP_ALLOCED below
+-extern SpinLock gc_alloc_block_sync;
+-#endif
+-
+-#define ACQUIRE_ALLOC_BLOCK_SPIN_LOCK() ACQUIRE_SPIN_LOCK(&gc_alloc_block_sync)
+-#define RELEASE_ALLOC_BLOCK_SPIN_LOCK() RELEASE_SPIN_LOCK(&gc_alloc_block_sync)
+-
+-
+ /* -----------------------------------------------------------------------------
+    The write barrier for MVARs and TVARs
+    -------------------------------------------------------------------------- */
+-- 
+GitLab
+

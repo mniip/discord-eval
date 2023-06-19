@@ -1,0 +1,21 @@
+#!/sandbox/bin/bash
+while [[ $# -gt 1 ]]
+do
+	opt="$1"
+	if [ "$opt" == "--print-file-name" ]
+	then
+		shift
+		file="$1"
+		case "$file" in
+			"libc.so") echo "/sandbox/usr/lib/x86_64-linux-gnu/libc.so.6" ;;
+			"libm.so") echo "/sandbox/usr/lib/x86_64-linux-gnu/libm.so.6" ;;
+			"libgmp.so") echo "/sandbox/lib/x86_64-linux-gnu/libgmp.so.10" ;;
+			"librt.so") echo "/sandbox/lib/x86_64-linux-gnu/librt.so.1" ;;
+			"libutil.so") echo "/sandbox/lib/x86_64-linux-gnu/libutil.so.1" ;;
+			"libdl.so") echo  "/sandbox/lib/x86_64-linux-gnu/libdl.so.2" ;;
+			"libpthread.so") echo "/sandbox/lib/x86_64-linux-gnu/libpthread.so.0" ;;
+			*) echo "$file"
+		esac
+	fi
+	shift
+done

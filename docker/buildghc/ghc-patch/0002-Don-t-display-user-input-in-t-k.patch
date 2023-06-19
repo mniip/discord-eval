@@ -1,0 +1,35 @@
+From c9e03662a9620df3eaaa5d29dbe61518d077a96d Mon Sep 17 00:00:00 2001
+From: mniip <mniip@mniip.com>
+Date: Sun, 18 Jun 2023 16:05:57 +0200
+Subject: [PATCH] Don't display user input in :t/:k
+
+---
+ ghc/GHCi/UI.hs | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/ghc/GHCi/UI.hs b/ghc/GHCi/UI.hs
+index 1f5f4c10ab..8c8ae8c40e 100644
+--- a/ghc/GHCi/UI.hs
++++ b/ghc/GHCi/UI.hs
+@@ -2340,8 +2340,7 @@ typeOfExpr str = handleSourceError printErrAndMaybeExit $
+   where
+     do_it mode expr_str
+       = do { ty <- GHC.exprType mode expr_str
+-           ;    printForUser $ sep [ text expr_str
+-                                   , nest 2 (dcolon <+> pprSigmaType ty)] }
++           ; printForUser $ pprSigmaType ty }
+ 
+ -----------------------------------------------------------------------------
+ -- | @:type-at@ command
+@@ -2475,7 +2474,7 @@ showRealSrcSpan spn = concat [ fp, ":(", show sl, ",", show sc
+ kindOfType :: GhciMonad m => Bool -> String -> m ()
+ kindOfType norm str = handleSourceError printErrAndMaybeExit $ do
+     (ty, kind) <- GHC.typeKind norm str
+-    printForUser $ vcat [ text str <+> dcolon <+> pprSigmaType kind
++    printForUser $ vcat [ pprSigmaType kind
+                         , ppWhen norm $ equals <+> pprSigmaType ty ]
+ 
+ -----------------------------------------------------------------------------
+-- 
+2.41.0
+

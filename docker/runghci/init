@@ -1,0 +1,82 @@
+:set -Wno-deprecated-flags -XGHC2021 -XAllowAmbiguousTypes -XApplicativeDo -XArrows -XBlockArguments -XDatatypeContexts -XDefaultSignatures -XDeriveAnyClass -XDerivingVia -XDuplicateRecordFields -XFunctionalDependencies -XGADTs -XImplicitParams -XImpredicativeTypes -XIncoherentInstances -XLambdaCase -XLexicalNegation -XLiberalTypeSynonyms -XLinearTypes -XMagicHash -XMonadComprehensions -XMultiWayIf -XNegativeLiterals -XNoImplicitPrelude -XNondecreasingIndentation -XNPlusKPatterns -XNumDecimals -XOverloadedLabels -XOverloadedRecordDot -XOverloadedStrings -XPackageImports -XParallelListComp -XPartialTypeSignatures -XPatternSynonyms -XQualifiedDo -XQuantifiedConstraints -XQuasiQuotes -XRecordWildCards -XRecursiveDo -XRoleAnnotations -XTemplateHaskell -XTransformListComp -XTypeData -XTypeFamilyDependencies -XUnboxedSums -XUnboxedTuples -XUndecidableInstances -XUndecidableSuperClasses -XUnicodeSyntax -XUnliftedDatatypes -XUnliftedFFITypes -XUnliftedNewtypes -XViewPatterns
+
+:module Conduit Control.Applicative Control.Applicative.Backwards Control.Comonad Control.Comonad.Hoist.Class Control.Comonad.Density Control.Concurrent.STM Control.Concurrent.STM.TSem Control.DeepSeq Control.Exception.Lens Control.Lens.Extras Control.Lens.Internal.Bazaar Control.Lens.Profunctor Control.Lens.Unsound Control.Monad Control.Monad.Accum Control.Monad.Catch Control.Monad.Catch.Pure Control.Monad.Co Control.Monad.Cont Control.Monad.Error.Class Control.Monad.Except Control.Monad.Fix Control.Monad.Free Control.Monad.Identity Control.Monad.IO.Class Control.Monad.Reader Control.Monad.RWS Control.Monad.Select Control.Monad.ST Control.Monad.State Control.Monad.Writer Control.Monad.Zip Criterion Data.Aeson.Lens Data.Align Data.Array.Byte Data.Biapplicative Data.Bifoldable Data.Bifoldable1 Data.Bifunctor Data.Bifunctor.Biap Data.Bifunctor.Biff Data.Bifunctor.Clown Data.Bifunctor.Fix Data.Bifunctor.Flip Data.Bifunctor.Functor Data.Bifunctor.Join Data.Bifunctor.Joker Data.Bifunctor.Product Data.Bifunctor.Sum Data.Bifunctor.Tannen Data.Bifunctor.TH Data.Bifunctor.Wrapped Data.Bitraversable Data.Bits Data.Bool Data.Char Data.Coerce Data.Complex Data.Conduit.Combinators.Stream Data.Constraint.Deferrable Data.Constraint.Forall Data.Constraint.Lifting Data.Constraint.Symbol Data.Constraint.Unsafe Data.Containers.ListUtils Data.Crosswalk Data.Dynamic Data.Either Data.Fixed Data.Function Data.Functor Data.Functor.Classes Data.Functor.Compose Data.Functor.Composition Data.Functor.Constant Data.Functor.Contravariant Data.Functor.Coyoneda Data.Functor.Identity Data.Functor.Kan.Lan Data.Functor.Kan.Ran Data.Functor.Reverse Data.Functor.These Data.Functor.Yoneda Data.Graph Data.Hashable Data.Hashable.Generic Data.Hashable.Lifted Data.Int Data.IORef Data.Ix Data.Kind Data.List.Split Data.Maybe Data.MonoTraversable Data.Number.BigFloat Data.Number.CReal Data.Number.Dif Data.Number.Interval Data.Number.Symbolic Data.Ord Data.Profunctor.Adjunction Data.Profunctor.Cayley Data.Profunctor.Choice Data.Profunctor.Closed Data.Profunctor.Composition Data.Profunctor.Mapping Data.Profunctor.Monad Data.Profunctor.Sieve Data.Profunctor.Strong Data.Profunctor.Unsafe Data.Proxy Data.Ratio Data.Semialign Data.Semialign.Indexed Data.Semigroup.Bifoldable Data.Semigroup.Bitraversable Data.Semigroup.Foldable Data.Semigroup.Traversable Data.STRef Data.String Data.Tagged Data.These Data.These.Combinators Data.Time Data.Time.Calendar.Easter Data.Time.Calendar.Julian Data.Time.Calendar.Month Data.Time.Calendar.MonthDay Data.Time.Calendar.OrdinalDate Data.Time.Calendar.Quarter Data.Time.Calendar.WeekDate Data.Time.Clock.POSIX Data.Time.Clock.System Data.Time.Clock.TAI Data.Time.Format.ISO8601 Data.Traversable Data.Traversable.Instances Data.Tree Data.Tuple Data.Type.Bool Data.Type.Equality Data.Type.Ord Data.Unique Data.Version Data.Void Data.Word Data.Zip Debug.Trace Foreign.C Foreign.C.ConstPtr Foreign.Marshal.Unsafe GHC.OverloadedLabels GHC.Pack GHC.Read GHC.Records GHC.Stack GHC.Stats GHC.TypeError GHC.TypeNats GHC.Types GHC.Unicode GHC.Weak Language.Haskell.TH.Quote Numeric Numeric.Natural System.Console.GetOpt System.CPUTime System.Directory System.Environment System.Exit System.FilePath System.Info System.IO System.IO.Unsafe System.Mem System.Mem.StableName System.Mem.Weak System.Posix.Internals System.Posix.Types Test.Tasty Text.Printf Text.Show Text.Show.Functions Type.Reflection Type.Reflection.Unsafe Unsafe.Coerce
+
+import "base" Prelude hiding (repeat, unzip, zip, zipWith)
+import "base" Control.Arrow hiding (first, second)
+import "base" Control.Arrow qualified as A
+import "base" Control.Category hiding (id, (.))
+import "base" Control.Category qualified as C
+import "base" Control.Concurrent hiding (yield)
+import "base" Control.Exception.Base hiding (bracket, bracket_, bracketOnError, catch, catchJust, finally, handle, handleJust, mask, mask_, onException, try, tryJust, TypeError, uninterruptibleMask, uninterruptibleMask_)
+import "base" Control.Exception hiding (bracket, bracket_, bracketOnError, catch, catches, catchJust, finally, handle, handleJust, Handler, mask, mask_, onException, try, tryJust, TypeError, uninterruptibleMask, uninterruptibleMask_)
+import "base" Data.Foldable1 hiding (foldl1, foldr1, head, last, maximum, maximumBy, minimum, minimumBy)
+import "base" Data.Foldable hiding (toList)
+import "base" Data.Foldable qualified as F
+import "base" Data.List hiding (foldl1', repeat, uncons, unzip, zip, zipWith)
+import "base" Data.Type.Coercion hiding (sym, trans)
+import "base" Foreign hiding (void)
+import "base" GHC.Exts hiding (traceEvent)
+import "base" GHC.Generics hiding (from, moduleName, to)
+import "base" GHC.IO hiding (bracket, catch, finally, liftIO, mask, mask_, onException, uninterruptibleMask, uninterruptibleMask_)
+import "base" GHC.OldList qualified as L
+import "base" System.IO.Error hiding (catchIOError)
+import "base" System.Timeout hiding (Timeout)
+import "aeson" Data.Aeson (FromJSON, ToJSON, Value)
+import "array" Data.Array.Unboxed (Array, UArray)
+import "array" Data.Array.IArray qualified as A
+import "array" Data.Array.MArray qualified as A
+import "bytestring" Data.ByteString (ByteString, StrictByteString)
+import "bytestring" Data.ByteString qualified as BS
+import "bytestring" Data.ByteString.Char8 qualified as BSC
+import "bytestring" Data.ByteString.Lazy (LazyByteString)
+import "bytestring" Data.ByteString.Lazy qualified as BSL
+import "bytestring" Data.ByteString.Lazy.Char8 qualified as BSLC
+import "bytestring" Data.ByteString.Short (ShortByteString)
+import "bytestring" Data.ByteString.Short qualified as BSS
+import "constraints" Data.Constraint hiding (trans, withDict, (***), (&&&), (\\))
+import "containers" Data.IntMap (IntMap)
+import "containers" Data.IntMap qualified as IM
+import "containers" Data.IntSet (IntSet)
+import "containers" Data.IntSet qualified as IS
+import "containers" Data.Map (Map)
+import "containers" Data.Map qualified as M
+import "containers" Data.Sequence (Seq)
+import "containers" Data.Sequence qualified as Seq
+import "containers" Data.Set (Set)
+import "containers" Data.Set qualified as S
+import "free" Control.Comonad.Cofree hiding (unfold, unfoldM)
+import "kan-extensions" Control.Monad.Codensity hiding (shift)
+import "lens" Control.Lens hiding (from, index, lazy, levels, para, Strict, (:<), (<.>))
+import "process" System.Process hiding (env)
+import "profunctors" Data.Profunctor hiding (WrappedArrow(..), (:->))
+import "QuickCheck" Test.QuickCheck hiding (choose, elements, Fixed, Fun, label, (.&.))
+import "random" System.Random hiding (split)
+import "recursion-schemes" Data.Functor.Base hiding (head, tail)
+import "recursion-schemes" Data.Functor.Foldable hiding (fold, unfold)
+import "reflection" Data.Reflection hiding (D)
+import "template-haskell" Language.Haskell.TH hiding (DecidedStrictness(..), Fixity, interruptible, reify, sourceLazy, SourceStrictness(..), SourceUnpackedness(..), Type)
+import "template-haskell" Language.Haskell.TH.Syntax hiding (DecidedStrictness(..), Fixity, Infix, Lift, lift, Module, reify, SourceStrictness(..), SourceUnpackedness(..), Type)
+import "text" Data.Text (Text)
+import "text" Data.Text qualified as T
+import "text" Data.Text.Encoding qualified as T
+import "text" Data.Text.Encoding.Error qualified as T
+import "text" Data.Text.IO qualified as T
+import "text" Data.Text.Lazy qualified as TL
+import "text" Data.Text.Lazy.Encoding qualified as TL
+import "text" Data.Text.Lazy.IO qualified as TL
+import "transformers" Control.Applicative.Lift hiding (Pure)
+import "unordered-containers" Data.HashMap.Lazy (HashMap)
+import "unordered-containers" Data.HashMap.Lazy qualified as HM
+import "unordered-containers" Data.HashSet (HashSet)
+import "unordered-containers" Data.HashSet qualified as HS
+import "vector" Data.Vector (Vector)
+import "vector" Data.Vector qualified as V
+import "vector" Data.Vector.Mutable (MVector)
+import "vector" Data.Vector.Mutable qualified as MV
+
+hSetEncoding stdin utf8 >> hSetEncoding stdout utf8 >> hSetEncoding stderr utf8
+pPrint = Text.Pretty.Simple.pPrintOpt Text.Pretty.Simple.NoCheckColorTty Text.Pretty.Simple.defaultOutputOptionsNoColor { Text.Pretty.Simple.outputOptionsCompact = True }
+
+:set prompt ""
+:set -dppr-cols10000 -interactive-print pPrint -v1

@@ -1,0 +1,5 @@
+#!/sandbox/bin/sh
+if [ ! -e /sandbox/tmp/ghci ]; then
+	mkdir /sandbox/tmp/ghci
+fi
+exec /sandbox/usr/bin/ghc -dynload deploy --interactive -v0 -ghci-script /sandbox/usr/lib/runghci/init -tmpdir /sandbox/tmp/ghci/ -odir /sandbox/tmp/ghci/ -hidir /sandbox/tmp/ghci/ -ignore-dot-ghci +RTS -M200M -V0 -C0 -K100M

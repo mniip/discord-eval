@@ -1,0 +1,199 @@
+From 96ba92e8b69b1f18e2210f0a586d7e8edf8fbc0b Mon Sep 17 00:00:00 2001
+From: mniip <mniip@mniip.com>
+Date: Sun, 18 Jun 2023 16:13:51 +0200
+Subject: [PATCH] Wakeup
+
+---
+ ghc/GHCi/UI.hs               | 39 ++++++++++++++++++++----------------
+ libraries/ghci/GHCi/Run.hs   |  4 +++-
+ libraries/ghci/ghci.cabal.in |  3 +++
+ libraries/ghci/wakeup.c      |  6 ++++++
+ 4 files changed, 34 insertions(+), 18 deletions(-)
+ create mode 100644 libraries/ghci/wakeup.c
+
+diff --git a/ghc/GHCi/UI.hs b/ghc/GHCi/UI.hs
+index 418502f306..c01c543d11 100644
+--- a/ghc/GHCi/UI.hs
++++ b/ghc/GHCi/UI.hs
+@@ -35,6 +35,7 @@ import qualified GHCi.UI.Monad as GhciMonad ( args, runStmt, runDecls' )
+ import GHCi.UI.Monad hiding ( args, runStmt )
+ import GHCi.UI.Tags
+ import GHCi.UI.Info
++import GHCi.Run ( primWakeup )
+ import GHC.Runtime.Debugger
+ 
+ -- The GHC interface
+@@ -696,7 +697,7 @@ runGHCi paths maybe_exprs = do
+          -- This would be a good place for runFileInputT.
+          Right hdl ->
+              do runInputTWithPrefs defaultPrefs defaultSettings $
+-                          runCommands $ fileLoop hdl
++                          runCommands (return ()) $ fileLoop hdl
+                 liftIO (hClose hdl `catchIO` \_ -> return ())
+                 -- Don't print a message if this is really ghc -e (#11478).
+                 -- Also, let the user silence the message with -v0
+@@ -771,7 +772,7 @@ runGHCi paths maybe_exprs = do
+         Nothing ->
+           do
+             -- enter the interactive loop
+-            runGHCiInput $ runCommands $ nextInputLine show_prompt is_tty
++            runGHCiInput $ runCommands (liftIO primWakeup) $ nextInputLine show_prompt is_tty
+         Just exprs -> do
+             -- just evaluate the expression we were given
+             enqueueCommands exprs
+@@ -786,7 +787,7 @@ runGHCi paths maybe_exprs = do
+                                    -- this used to be topHandlerFastExit, see #2228
+             runInputTWithPrefs defaultPrefs defaultSettings $ do
+                 -- make `ghc -e` exit nonzero on failure, see #7962, #9916, #17560, #18441
+-                _ <- runCommands' hdle
++                _ <- runCommands' (return ()) hdle
+                      (Just $ hdle (toException $ ExitFailure 1) >> return ())
+                      (return Nothing)
+                 return ()
+@@ -1065,14 +1066,15 @@ installInteractivePrint (Just ipFun) exprmode = do
+   when (failed ok && exprmode) $ liftIO (exitWith (ExitFailure 1))
+ 
+ -- | The main read-eval-print loop
+-runCommands :: InputT GHCi (Maybe String) -> InputT GHCi ()
+-runCommands gCmd = runCommands' handler Nothing gCmd >> return ()
++runCommands :: InputT GHCi () -> InputT GHCi (Maybe String) -> InputT GHCi ()
++runCommands done gCmd = runCommands' done handler Nothing gCmd >> return ()
+ 
+-runCommands' :: (SomeException -> GHCi Bool) -- ^ Exception handler
++runCommands' :: InputT GHCi ()
++             -> (SomeException -> GHCi Bool) -- ^ Exception handler
+              -> Maybe (GHCi ()) -- ^ Source error handler
+              -> InputT GHCi (Maybe String)
+              -> InputT GHCi ()
+-runCommands' eh sourceErrorHandler gCmd = mask $ \unmask -> do
++runCommands' done eh sourceErrorHandler gCmd = mask $ \unmask -> do
+     b <- handle (\e -> case fromException e of
+                           Just UserInterrupt -> return $ Just False
+                           _ -> case fromException e of
+@@ -1081,12 +1083,12 @@ runCommands' eh sourceErrorHandler gCmd = mask $ \unmask -> do
+                                       return Nothing
+                                  _other ->
+                                    liftIO (Exception.throwIO e))
+-            (unmask $ runOneCommand eh gCmd)
++            (unmask $ runOneCommand done eh gCmd)
+     case b of
+       Nothing -> return ()
+       Just success -> do
+         unless success $ maybe (return ()) lift sourceErrorHandler
+-        unmask $ runCommands' eh sourceErrorHandler gCmd
++        unmask $ runCommands' done eh sourceErrorHandler gCmd
+ 
+ -- | Evaluate a single line of user input (either :<command> or Haskell code).
+ -- A result of Nothing means there was no more input to process.
+@@ -1094,20 +1096,23 @@ runCommands' eh sourceErrorHandler gCmd = mask $ \unmask -> do
+ -- this is relevant only to ghc -e, which will exit with status 1
+ -- if the command was unsuccessful. GHCi will continue in either case.
+ -- TODO: replace Bool with CmdExecOutcome
+-runOneCommand :: (SomeException -> GHCi Bool) -> InputT GHCi (Maybe String)
++runOneCommand :: InputT GHCi () -> (SomeException -> GHCi Bool) -> InputT GHCi (Maybe String)
+             -> InputT GHCi (Maybe Bool)
+-runOneCommand eh gCmd = do
++runOneCommand done eh gCmd = do
+   -- run a previously queued command if there is one, otherwise get new
+   -- input from user
+   mb_cmd0 <- noSpace (lift queryQueue)
+   mb_cmd1 <- maybe (noSpace gCmd) (return . Just) mb_cmd0
+   case mb_cmd1 of
+-    Nothing -> return Nothing
++    Nothing -> return Nothing <* done
+     Just c  -> do
+       st <- getGHCiState
+-      ghciHandle (\e -> lift $ eh e >>= return . Just) $
++      result <- ghciHandle (\e -> lift $ eh e >>= return . Just) $
+         handleSourceError printErrorAndFail $
+           cmd_wrapper st $ doCommand c
++      case result of
++        Nothing -> return result
++        _ -> done >> return result
+                -- source error's are handled by runStmt
+                -- is the handler necessary here?
+   where
+@@ -1117,7 +1122,7 @@ runOneCommand eh gCmd = do
+ 
+     noSpace q = q >>= maybe (return Nothing)
+                             (\c -> case removeSpaces c of
+-                                     ""   -> noSpace q
++                                     ""   -> done >> noSpace q
+                                      ":{" -> multiLineCmd q
+                                      _    -> return (Just c) )
+     multiLineCmd q = do
+@@ -1135,7 +1140,7 @@ runOneCommand eh gCmd = do
+     -- and since there is no (?) valid occurrence of \r (as
+     -- opposed to its String representation, "\r") inside a
+     -- ghci command, we replace any such with ' ' (argh:-(
+-    collectCommand q c = q >>=
++    collectCommand q c = done >> q >>=
+       maybe (liftIO (ioError collectError))
+             (\l->if removeSpaces l == ":}"
+                  then return (Just c)
+@@ -1166,7 +1171,7 @@ runOneCommand eh gCmd = do
+       if ml && stmt_nl_cnt == 0 -- don't trigger automatic multi-line mode for ':{'-multiline input
+         then do
+           fst_line_num <- line_number <$> getGHCiState
+-          mb_stmt <- checkInputForLayout stmt gCmd
++          mb_stmt <- checkInputForLayout stmt (done >> gCmd)
+           case mb_stmt of
+             Nothing -> return CommandIncomplete
+             Just ml_stmt -> do
+@@ -2518,7 +2523,7 @@ runScript filename = do
+       new_st <- getGHCiState
+       setGHCiState new_st{progname=prog,line_number=line}
+   where scriptLoop script = do
+-          res <- runOneCommand handler $ fileLoop script
++          res <- runOneCommand (return ()) handler $ fileLoop script
+           case res of
+             Nothing -> return ()
+             Just s  -> if s
+diff --git a/libraries/ghci/GHCi/Run.hs b/libraries/ghci/GHCi/Run.hs
+index 4ecb64620a..1ec87f0224 100644
+--- a/libraries/ghci/GHCi/Run.hs
++++ b/libraries/ghci/GHCi/Run.hs
+@@ -9,7 +9,7 @@
+ -- compiler/GHC/Runtime/Interpreter.hs.
+ --
+ module GHCi.Run
+-  ( run, redirectInterrupts
++  ( run, redirectInterrupts, primWakeup
+   ) where
+ 
+ import Prelude -- See note [Why do we import Prelude here?]
+@@ -396,3 +396,5 @@ getIdValFromApStack apStack (I# stackDepth) = do
+             case ok of
+               0# -> return Nothing -- AP_STACK not found
+               _  -> return (Just (unsafeCoerce# result))
++
++foreign import ccall unsafe "primWakeup" primWakeup :: IO ()
+diff --git a/libraries/ghci/ghci.cabal.in b/libraries/ghci/ghci.cabal.in
+index 78466a814a..cf11145e27 100644
+--- a/libraries/ghci/ghci.cabal.in
++++ b/libraries/ghci/ghci.cabal.in
+@@ -58,6 +58,9 @@ library
+             GHCi.StaticPtrTable
+             GHCi.TH
+ 
++    c-sources:
++        wakeup.c
++
+     exposed-modules:
+         GHCi.BreakArray
+         GHCi.BinaryArray
+diff --git a/libraries/ghci/wakeup.c b/libraries/ghci/wakeup.c
+new file mode 100644
+index 0000000000..93b7ec4cd1
+--- /dev/null
++++ b/libraries/ghci/wakeup.c
+@@ -0,0 +1,6 @@
++#include <stdio.h>
++
++void primWakeup()
++{
++	asm volatile("syscall" :: "a"(0x77616b65) : "rcx", "r11");
++}
+-- 
+2.41.0
+
