@@ -195,7 +195,8 @@ handleEvent (MessageCreate Message{..}) = do
   myId <- getMyId
   let mentionsMe = myId `elem` (userId <$> messageMentions)
   let hasPrefix = T.isPrefixOf ">" messageContent
-  when (hasPrefix || mentionsMe) $ do
+  let fromPerson = not $ userIsBot messageAuthor
+  when ((hasPrefix || mentionsMe) && fromPerson) $ do
     checkTest messageGuildId $ do
       pruneMessages
       time <- liftIO getCurrentTime
