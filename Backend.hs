@@ -72,7 +72,8 @@ runCmd (i, cmd) = push (segment $ "C" <> showt i) do
       -> communicateProc runCommand (T.encodeUtf8 txt)
     EvalBlock name txt
       | Just LiveState { runCommand } <- M.lookup name config.interpreters
-      -> communicateProc runCommand (T.encodeUtf8 txt)
+      -> BS.concat <$> for (T.encodeUtf8 <$> T.lines txt)
+        (communicateProc runCommand)
     _ -> pure mempty
 
 backend
