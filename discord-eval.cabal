@@ -6,35 +6,63 @@ license:             BSD3
 license-file:        LICENSE
 author:              mniip
 maintainer:          mniip@mniip.com
-copyright:           (C) 2019 mniip
+copyright:           (C) 2019-2023 mniip
 category:            Development
 build-type:          Simple
 cabal-version:       >=1.10
 
 executable discord-eval
   main-is:             Main.hs
-  other-modules:       DupQueue, JsonUtil, Pastebin, StateM
-  build-depends:       base == 4.*,
-                       aeson,
-                       attoparsec,
-                       binary,
-                       bytestring,
-                       containers,
-                       deepseq,
-                       discord-haskell >= 1.6,
-                       exceptions,
-                       http-api-data,
-                       http-client,
-                       http-client-tls,
-                       http-types,
-                       lens,
-                       mtl,
-                       network,
-                       process,
-                       scientific,
-                       stm,
-                       text,
-                       time,
-                       transformers,
-                       vector
+  other-modules:       Backend
+                     , Cache
+                     , Config
+                     , Format
+                     , Frontend
+                     , Parser
+                     , Pastebin
+                     , Types
+                     , UpdateChan
+  build-depends:       base == 4.*
+                     , aeson
+                     , bytestring
+                     , calamity
+                     , containers
+                     , data-default
+                     , df1
+                     , di
+                     , di-polysemy
+                     , http-api-data
+                     , http-client
+                     , http-client-tls
+                     , http-types
+                     , megaparsec
+                     , text
+                     , text-show
+                     , polysemy
+                     , polysemy-plugin
+                     , process
+                     , stm
+                     , time
+                     , yaml
   default-language:    Haskell2010
+  default-extensions:  BlockArguments
+                     , ConstraintKinds
+                     , DataKinds
+                     , DeriveAnyClass
+                     , DeriveGeneric
+                     , DerivingVia
+                     , FlexibleContexts
+                     , GADTs
+                     , GeneralizedNewtypeDeriving
+                     , ImportQualifiedPost
+                     , LambdaCase
+                     , NamedFieldPuns
+                     , NoFieldSelectors
+                     , OverloadedRecordDot
+                     , OverloadedStrings
+                     , RecordWildCards
+                     , ScopedTypeVariables
+                     , TupleSections
+                     , TypeApplications
+                     , ViewPatterns
+  ghc-options:         -Wall
