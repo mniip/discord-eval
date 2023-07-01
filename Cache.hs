@@ -2,7 +2,6 @@
 module Cache where
 
 import Calamity hiding (Embed, Member)
-import Config
 import Control.Monad.IO.Class
 import Data.Default
 import Data.List.NonEmpty (NonEmpty)
@@ -14,6 +13,8 @@ import Data.Time
 import Polysemy
 import Polysemy.AtomicState
 import Polysemy.Reader
+
+import Config
 import Types
 
 data ActiveMessage = ActiveMessage

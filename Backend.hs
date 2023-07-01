@@ -2,22 +2,21 @@
 module Backend where
 
 import Calamity hiding (Embed)
-import Config
+import Control.Concurrent
 import Control.Exception hiding (bracket, bracket_)
 import Control.Exception qualified as E
-import Control.Concurrent
 import Control.Monad
 import Control.Monad.IO.Class
-import Data.Foldable
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.Foldable
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as M
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
 import Data.Traversable
 import Df1 hiding (Message)
 import DiPolysemy
-import Format
 import Network.HTTP.Client hiding (Request)
 import Network.HTTP.Client.TLS
 import Polysemy
@@ -27,6 +26,9 @@ import Polysemy.Resource
 import System.IO
 import System.Process hiding (runCommand)
 import TextShow
+
+import Config
+import Format
 import Types
 import UpdateChan
 

@@ -1,20 +1,21 @@
 {-# OPTIONS_GHC -fplugin=Polysemy.Plugin #-}
 module Main where
 
-import Backend
 import Calamity.Cache.InMemory
 import Calamity hiding (Embed)
 import Calamity.Metrics.Noop
-import Config
 import Control.Monad.IO.Class
 import Data.Yaml
 import Di qualified
 import DiPolysemy
-import Frontend
 import Polysemy
 import Polysemy.Async
 import Polysemy.Reader
 import Polysemy.Resource
+
+import Config
+import Backend
+import Frontend
 import UpdateChan
 
 main :: IO ()

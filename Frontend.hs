@@ -1,14 +1,11 @@
 {-# OPTIONS_GHC -fplugin=Polysemy.Plugin #-}
 module Frontend where
 
-import Cache
-import Cache qualified as ActiveMessage (ActiveMessage(..))
 import Calamity hiding (Embed, Member)
 import Calamity qualified as CreateMessageOptions (CreateMessageOptions(..))
 import Calamity.Cache.Eff
 import Calamity.Internal.Utils (MaybeNull(..))
 import Calamity.Types.Model.Channel.UpdatedMessage
-import Config
 import Control.Concurrent.MVar
 import Control.Monad
 import Control.Monad.IO.Class
@@ -23,12 +20,16 @@ import Data.Text qualified as T
 import Data.Time
 import Df1 hiding (Message)
 import DiPolysemy
-import Parser
 import Polysemy
 import Polysemy.AtomicState
 import Polysemy.Reader
 import Polysemy.Resource
 import TextShow
+
+import Cache
+import Cache qualified as ActiveMessage (ActiveMessage(..))
+import Config
+import Parser
 import Types
 import UpdateChan
 

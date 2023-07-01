@@ -1,7 +1,6 @@
 {-# OPTIONS_GHC -fplugin=Polysemy.Plugin #-}
 module Parser where
 
-import Config
 import Control.Monad
 import Data.Char
 import Data.Map qualified as M
@@ -13,6 +12,8 @@ import Polysemy
 import Polysemy.Reader
 import Text.Megaparsec
 import Text.Megaparsec.Char
+
+import Config
 import Types
 
 codeBlock :: Parsec Void Text (Maybe Text, Text)

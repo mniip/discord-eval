@@ -9,8 +9,9 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
 import Data.Text.Encoding.Error qualified as T hiding (replace)
 import Data.Ord
-import Pastebin
 import Polysemy
+
+import Pastebin
 
 formatCodeBlock :: ByteString -> Text
 formatCodeBlock bs

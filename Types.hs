@@ -1,10 +1,11 @@
 module Types where
 
-import Config
 import Control.Concurrent
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import TextShow
+
+import Config
 
 data Command
   = Reset InterpreterName
