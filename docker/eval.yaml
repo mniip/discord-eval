@@ -1,0 +1,41 @@
+logFile: /dev/null
+token: AAAAAAAAAAAAAAAAAAAAAAAA.AAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+testGuilds: ["535174642017632276"]
+isTest: true
+forgetAfterSeconds: 600
+blockCountLimit: 10
+msgSizeLimit: 2000
+pastebinSizeLimit: 131068
+reactWait:
+  name: "\u231B"
+reactCancel:
+  name: "\u274C"
+emptyOutput: "\u2705"
+interpreters:
+  ghci:
+    tag: LiveState
+    runCommand:
+      - /jail/sandbox
+      - /jail.conf
+      - Dghci
+    resetCommand:
+      - /jail/sandbox
+      - /jail.conf
+      - kill
+      - Dghci
+defaultInline:
+  interpreter: ghci
+  stripControl: true
+defaultCodeBlock:
+  interpreter: ghci
+  prefix: ":{\n"
+  suffix: "\n:}\n"
+codeBlockLanguages:
+  hs:
+    interpreter: ghci
+    prefix: ":{\n"
+    suffix: "\n:}\n"
+  haskell:
+    interpreter: ghci
+    prefix: ":{\n"
+    suffix: "\n:}\n"

@@ -44,27 +44,45 @@ RUN apt-get update && apt-get install -y \
 	cd / && \
 	rm -r /buildghc/Cabal
 
-RUN CABAL_DIR=/buildghc/ /buildghc/bin/cabal v1-install -j16 -w /sandbox/usr/bin/ghc --prefix=/sandbox/usr --haddock-all --disable-library-profiling --global \
+RUN CABAL_DIR=/buildghc/ PATH=/buildghc/:"$PATH" /buildghc/bin/cabal v1-install -j16 -w /sandbox/usr/bin/ghc --prefix=/sandbox/usr --haddock-all --disable-library-profiling --global \
 	adjunctions \
 	aeson \
 	attoparsec \
+	barbies \
 	bifunctors \
 	binary \
+	cereal \
 	conduit \
+	conduit-extra \
 	constraints \
 	criterion \
 	directory \
 	dlist \
+	either \
+	extra \
 	free \
+	generic-arbitrary \
+	generic-data \
+	generic-lens \
+	generic-monoid \
+	generics-sop \
 	hashable \
+	haskell-src-exts \
+	hspec \
 	kan-extensions \
 	lens \
 	lens-aeson \
+	lifted-async \
 	linear \
 	megaparsec \
+	memory \
+	microlens-th \
+	mmorph \
 	mono-traversable \
 	numbers \
+	optics \
 	parsec \
+	pretty-show \
 	pretty-simple \
 	primitive \
 	process \
@@ -73,11 +91,14 @@ RUN CABAL_DIR=/buildghc/ /buildghc/bin/cabal v1-install -j16 -w /sandbox/usr/bin
 	random \
 	recursion-schemes \
 	reflection \
+	regex-applicative \
 	semialign \
 	semigroupoids \
+	singletons-base \
 	split \
 	stm \
 	strict \
+	syb \
 	tagged \
 	tasty \
 	th-abstraction \
@@ -85,7 +106,10 @@ RUN CABAL_DIR=/buildghc/ /buildghc/bin/cabal v1-install -j16 -w /sandbox/usr/bin
 	unliftio \
 	unordered-containers \
 	vector \
-	vector-algorithms
+	vector-algorithms \
+	vector-sized \
+	vinyl \
+	yaml
 
 RUN git clone https://github.com/mniip/discord-eval.git --depth 1 /discord-eval && \
 	cd /discord-eval && \
@@ -120,6 +144,6 @@ RUN apt-get purge -y \
 
 COPY gcc /sandbox/usr/bin/gcc
 COPY runghci /sandbox/usr/lib/runghci
-COPY eval.conf jail.conf /
+COPY eval.yaml jail.conf /
 
 CMD su nobody -s /bin/sh -c 'LANG=C.UTF-8 exec /usr/bin/discord-eval'
