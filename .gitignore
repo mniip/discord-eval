@@ -3,3 +3,4 @@
 *.dyn_hi
 *.dyn_o
 eval.conf
+dist-newstyle/
