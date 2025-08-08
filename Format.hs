@@ -49,4 +49,4 @@ formatResults maxChars results = go [] $
         link <- pastebin result
         go ((i, formatPaste link):pasted) bs
       | otherwise
-      = pure $ T.concat $ snd <$> (sortOn fst pasted ++ (second snd <$> blocks))
+      = pure $ T.concat $ snd <$> (sortOn fst $ pasted ++ (second snd <$> blocks))
